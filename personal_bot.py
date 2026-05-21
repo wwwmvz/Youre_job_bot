@@ -559,9 +559,14 @@ async def send_jobs_to_user(bot, user):
         if desc_text:
             caption += f"\n📝 {desc_text[:280]}\n"
         caption += f"\n🔗 {job['url']}\n📌 {job['source']}"
-        if len(caption)>1024: caption=caption[:1020]+"..."
+        if len(caption)>4096: caption=caption[:4090]+"..."
+        text = f"🆕 <b>{job['title']}</b>\n\n🏢 {job['company']}\n💰 {sal_d}\n📍 {city_d}\n"
+        if desc_text:
+            text += f"\n📋 <b>Обов'язки:</b>\n{desc_text[:400]}\n"
+        text += f"\n🔗 <a href=\"{job['url']}\">Переглянути вакансію</a>\n📌 {job['source']}"
+        if len(text)>4096: text=text[:4090]+"..."
         try:
-            await bot.send_photo(chat_id=user["user_id"], photo=photo, caption=caption)
+            await bot.send_message(chat_id=user["user_id"], text=text, parse_mode="HTML", disable_web_page_preview=False)
             mark_sent(user["user_id"], job["id"])
             sent += 1
             await asyncio.sleep(0.5)
