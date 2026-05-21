@@ -529,6 +529,40 @@ async def fetch_job_desc(url: str, source: str) -> str:
         logger.error(f"fetch_job_desc error: {e}")
     return ""
 
+
+async def fetch_duties_ai(url: str) -> str:
+    """Use Claude to extract job duties from vacancy page."""
+    try:
+        async with httpx.AsyncClient(headers={"User-Agent":"Mozilla/5.0"}, timeout=8, follow_redirects=True) as dc:
+            dr = await dc.get(url)
+            if dr.status_code != 200:
+                return ""
+            from bs4 import BeautifulSoup as BS
+            soup = BS(dr.text, "lxml")
+            # Remove scripts and styles
+            for tag in soup(["script","style","nav","header","footer"]):
+                tag.decompose()
+            text = soup.get_text(separator=" ", strip=True)[:3000]
+        
+        response = await httpx.AsyncClient(timeout=10).post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 200,
+                "messages": [{
+                    "role": "user",
+                    "content": f"З тексту вакансії витягни ТІЛЬКИ обов\'язки та що треба робити. Відповідь максимум 2-3 речення українською. Якщо обов\'язків немає — напиши порожньо.\n\n{text}"
+                }]
+            }
+        )
+        data = response.json()
+        result = data.get("content", [{}])[0].get("text", "").strip()
+        return result if len(result) > 20 else ""
+    except Exception as e:
+        logger.error(f"AI fetch error: {e}")
+        return ""
+
 def salary_match(job_salary_str, user_salary):
     if not job_salary_str or not user_salary: return True
     nums = re.findall(r"\d[\d\s]*\d|\d+", job_salary_str.replace(" ",""))
