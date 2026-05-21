@@ -39,6 +39,7 @@ def init_db():
                 user_id BIGINT PRIMARY KEY,
                 city TEXT, profession TEXT, profession_label TEXT,
                 experience TEXT, salary INTEGER, schedule TEXT,
+                first_name TEXT, last_name TEXT, username TEXT, language_code TEXT,
                 active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT NOW(),
                 updated_at TIMESTAMP DEFAULT NOW()
@@ -57,6 +58,7 @@ def init_db():
                 user_id INTEGER PRIMARY KEY,
                 city TEXT, profession TEXT, profession_label TEXT,
                 experience TEXT, salary INTEGER, schedule TEXT,
+                first_name TEXT, last_name TEXT, username TEXT, language_code TEXT,
                 active INTEGER DEFAULT 1,
                 created_at TEXT, updated_at TEXT
             )
@@ -69,28 +71,42 @@ def init_db():
         """)
     conn.commit()
     conn.close()
+    # Add new columns if they don't exist (for existing tables)
+    try:
+        conn2, mode2 = get_db()
+        cur2 = conn2.cursor()
+        if mode2 == "pg":
+            for col in ["first_name", "last_name", "username", "language_code"]:
+                try:
+                    cur2.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT DEFAULT ''")
+                    conn2.commit()
+                except Exception:
+                    conn2.rollback()
+        conn2.close()
+    except Exception as e:
+        logger.warning(f"ALTER TABLE skipped: {e}")
     logger.info("DB initialized successfully")
 
-def save_user(user_id, city, profession, profession_label, experience, salary, schedule):
+def save_user(user_id, city, profession, profession_label, experience, salary, schedule, first_name="", last_name="", username="", language_code=""):
     conn, mode = get_db()
     cur = conn.cursor()
     now = datetime.utcnow().isoformat()
     if mode == "pg":
         cur.execute("""
-            INSERT INTO users (user_id,city,profession,profession_label,experience,salary,schedule,updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,NOW())
+            INSERT INTO users (user_id,city,profession,profession_label,experience,salary,schedule,first_name,last_name,username,language_code,updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
             ON CONFLICT (user_id) DO UPDATE SET
                 city=EXCLUDED.city, profession=EXCLUDED.profession,
                 profession_label=EXCLUDED.profession_label,
                 experience=EXCLUDED.experience, salary=EXCLUDED.salary,
-                schedule=EXCLUDED.schedule, active=TRUE, updated_at=NOW()
-        """, (user_id, city, profession, profession_label, experience, salary, schedule))
+                schedule=EXCLUDED.schedule, first_name=EXCLUDED.first_name, last_name=EXCLUDED.last_name, username=EXCLUDED.username, language_code=EXCLUDED.language_code, active=TRUE, updated_at=NOW()
+        """, (user_id, city, profession, profession_label, experience, salary, schedule, first_name, last_name, username, language_code))
     else:
         cur.execute("""
             INSERT OR REPLACE INTO users
-            (user_id,city,profession,profession_label,experience,salary,schedule,active,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,1,?,?)
-        """, (user_id, city, profession, profession_label, experience, salary, schedule, now, now))
+            (user_id,city,profession,profession_label,experience,salary,schedule,first_name,last_name,username,language_code,active,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?)
+        """, (user_id, city, profession, profession_label, experience, salary, schedule, first_name, last_name, username, language_code, now, now))
     conn.commit()
     conn.close()
     logger.info(f"Saved user {user_id} to {mode}")
@@ -106,7 +122,7 @@ def get_user(user_id):
     conn.close()
     if not row:
         return None
-    cols = ["user_id","city","profession","profession_label","experience","salary","schedule","active","created_at","updated_at"]
+    cols = ["user_id","city","profession","profession_label","experience","salary","schedule","first_name","last_name","username","language_code","active","created_at","updated_at"]
     return dict(zip(cols, row))
 
 def mark_sent(user_id, job_id):
@@ -143,7 +159,7 @@ def get_all_active_users():
         cur.execute("SELECT * FROM users WHERE active=1")
     rows = cur.fetchall()
     conn.close()
-    cols = ["user_id","city","profession","profession_label","experience","salary","schedule","active","created_at","updated_at"]
+    cols = ["user_id","city","profession","profession_label","experience","salary","schedule","first_name","last_name","username","language_code","active","created_at","updated_at"]
     return [dict(zip(cols, r)) for r in rows]
 
 def deactivate_user(user_id):
@@ -291,8 +307,13 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if text not in SCHEDULES:
             await update.message.reply_text("Оберіть варіант з кнопок 👇", reply_markup=schedule_kb()); return
         state["schedule"] = text
+        tg_user = update.effective_user
         save_user(uid, state["city"], state["profession"], state["profession_label"],
-                  state["experience"], state["salary"], state["schedule"])
+                  state["experience"], state["salary"], state["schedule"],
+                  first_name=tg_user.first_name or "",
+                  last_name=tg_user.last_name or "",
+                  username=tg_user.username or "",
+                  language_code=tg_user.language_code or "")
         user_state.pop(uid, None)
         await update.message.reply_text(
             f"✅ Профіль збережено!\n\n"
