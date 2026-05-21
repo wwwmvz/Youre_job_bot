@@ -564,11 +564,20 @@ async def send_jobs_to_user(bot, user):
                         DUTY_KW = ["обов","функці","завдан","відповідальност","зона","що потрібно","що ти будеш","твої задачі","responsibilities","duties","what you","your role","you will"]
                         for tag in ds.find_all(["h2","h3","strong","b"]):
                             if any(k in tag.get_text().lower() for k in DUTY_KW):
+                                # Try siblings of parent element
+                                parent = tag.parent
+                                siblings = list(parent.find_next_siblings())
                                 parts = []
-                                for s in tag.find_next_siblings():
+                                for s in siblings:
                                     if s.name in ["h2","h3"]: break
                                     t = s.get_text(" ", strip=True)
                                     if t: parts.append(t)
+                                if not parts:
+                                    # Try direct siblings
+                                    for s in tag.find_next_siblings():
+                                        if s.name in ["h2","h3"]: break
+                                        t = s.get_text(" ", strip=True)
+                                        if t: parts.append(t)
                                 desc_text = " ".join(parts)[:400]
                                 if desc_text: break
             except: pass
