@@ -10,7 +10,6 @@ import httpx
 from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
-from playwright.async_api import async_playwright
 
 logging.basicConfig(
     level=logging.INFO,
@@ -306,11 +305,9 @@ async def parse_dou(client: httpx.AsyncClient) -> list:
 
 
 # ─── PLAYWRIGHT ПАРСЕРИ ──────────────────────────────────────────────────────
-async def parse_robota_ua_playwright() -> list:
     log.info("Robota.ua: запускаємо Playwright…")
     jobs = []
     try:
-        async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page(user_agent=HEADERS["User-Agent"])
             await page.goto("https://robota.ua/zapros/all/ukraine", timeout=30000)
@@ -346,17 +343,14 @@ async def parse_robota_ua_playwright() -> list:
             jobs.append(Job(uid, title, company, salary, location, "", url, "Robota.ua", ""))
 
     except Exception as e:
-        log.error(f"Robota.ua playwright помилка: {e}")
 
     log.info(f"Robota.ua: зібрано {len(jobs)} вакансій")
     return jobs
 
 
-async def parse_djinni_playwright() -> list:
     log.info("Djinni.co: запускаємо Playwright…")
     jobs = []
     try:
-        async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page(user_agent=HEADERS["User-Agent"])
             await page.goto("https://djinni.co/jobs/", timeout=30000)
@@ -394,7 +388,6 @@ async def parse_djinni_playwright() -> list:
             jobs.append(Job(uid, title, company, salary, location, experience, url, "Djinni.co", description))
 
     except Exception as e:
-        log.error(f"Djinni playwright помилка: {e}")
 
     log.info(f"Djinni: зібрано {len(jobs)} вакансій")
     return jobs
@@ -405,8 +398,6 @@ async def collect_all_jobs(client: httpx.AsyncClient) -> list:
     results = await asyncio.gather(
         parse_work_ua(client),
         parse_dou(client),
-        parse_robota_ua_playwright(),
-        parse_djinni_playwright(),
         return_exceptions=True
     )
     all_jobs = {"work": [], "dou": [], "robota": [], "djinni": []}
