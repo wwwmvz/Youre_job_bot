@@ -1,8 +1,6 @@
 httpx
 beautifulsoup4
-python-telegram-bot
+python-telegram-bot[job-queue]
 lxml
-playwright
 nest_asyncio
 psycopg2-binary
-# updated

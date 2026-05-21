@@ -1,6 +1,3 @@
-"""
-Personal bot with PostgreSQL - fixed init_db
-"""
 import os, logging, asyncio, httpx, re
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
@@ -12,9 +9,12 @@ nest_asyncio.apply()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-PERSONAL_BOT_TOKEN = os.getenv("PERSONAL_BOT_TOKEN", "8018911506:AAFPS_Jdw8MCYJ34M3UGnKvGoEV8PN7yRSQ")
-MAIN_CHANNEL = os.getenv("MAIN_CHANNEL", "https://t.me/+YNCaw9gBllI5NzU0")
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+PERSONAL_BOT_TOKEN = os.environ.get("PERSONAL_BOT_TOKEN", "8018911506:AAFPS_Jdw8MCYJ34M3UGnKvGoEV8PN7yRSQ")
+MAIN_CHANNEL       = os.environ.get("MAIN_CHANNEL",        "https://t.me/+YNCaw9gBllI5NzU0")
+DATABASE_URL       = os.environ.get("DATABASE_URL",        "")
+
+logger.info(f"DATABASE_URL present: {bool(DATABASE_URL)}")
+logger.info(f"TOKEN present: {bool(PERSONAL_BOT_TOKEN)}")
 
 # ── DB ────────────────────────────────────────────────────────────────────────
 def get_db():
@@ -30,7 +30,6 @@ def get_db():
     return conn, "sqlite"
 
 def init_db():
-    logger.info(f"DATABASE_URL present: {bool(DATABASE_URL)}")
     conn, mode = get_db()
     logger.info(f"DB mode: {mode}")
     cur = conn.cursor()
@@ -65,8 +64,7 @@ def init_db():
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sent_jobs (
                 user_id INTEGER, job_id TEXT,
-                sent_at TEXT,
-                PRIMARY KEY (user_id, job_id)
+                sent_at TEXT, PRIMARY KEY (user_id, job_id)
             )
         """)
     conn.commit()
@@ -79,7 +77,7 @@ def save_user(user_id, city, profession, profession_label, experience, salary, s
     now = datetime.utcnow().isoformat()
     if mode == "pg":
         cur.execute("""
-            INSERT INTO users (user_id, city, profession, profession_label, experience, salary, schedule, updated_at)
+            INSERT INTO users (user_id,city,profession,profession_label,experience,salary,schedule,updated_at)
             VALUES (%s,%s,%s,%s,%s,%s,%s,NOW())
             ON CONFLICT (user_id) DO UPDATE SET
                 city=EXCLUDED.city, profession=EXCLUDED.profession,
@@ -121,8 +119,8 @@ def mark_sent(user_id, job_id):
         else:
             cur.execute("INSERT OR IGNORE INTO sent_jobs (user_id,job_id,sent_at) VALUES (?,?,?)", (user_id, job_id, now))
         conn.commit()
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"mark_sent error: {e}")
     conn.close()
 
 def is_sent(user_id, job_id):
@@ -158,15 +156,14 @@ def deactivate_user(user_id):
     conn.commit()
     conn.close()
 
-# ── State ─────────────────────────────────────────────────────────────────────
+# ── State & UI ────────────────────────────────────────────────────────────────
 user_state = {}
 
 CITIES = [
     "Київ","Львів","Харків","Одеса","Дніпро","Запоріжжя","Вінниця",
     "Чернівці","Ужгород","Івано-Франківськ","Тернопіль","Луцьк",
     "Рівне","Хмельницький","Житомир","Черкаси","Кропивницький",
-    "Суми","Полтава","Миколаїв","Херсон","Зміїв","Ірпінь","Буча",
-    "Віддалено"
+    "Суми","Полтава","Миколаїв","Херсон","Ірпінь","Буча","Віддалено"
 ]
 
 PROFESSIONS = [
@@ -204,16 +201,14 @@ MAIN_KB = ReplyKeyboardMarkup(
 )
 
 def city_kb():
-    btns = [[KeyboardButton(CITIES[i]), KeyboardButton(CITIES[i+1])] for i in range(0, len(CITIES)-1, 2)]
-    if len(CITIES) % 2:
-        btns.append([KeyboardButton(CITIES[-1])])
+    btns = [[KeyboardButton(CITIES[i]), KeyboardButton(CITIES[i+1])] for i in range(0,len(CITIES)-1,2)]
+    if len(CITIES)%2: btns.append([KeyboardButton(CITIES[-1])])
     return ReplyKeyboardMarkup(btns, resize_keyboard=True)
 
 def profession_kb():
     labels = [p[0] for p in PROFESSIONS]
-    btns = [[KeyboardButton(labels[i]), KeyboardButton(labels[i+1])] for i in range(0, len(labels)-1, 2)]
-    if len(labels) % 2:
-        btns.append([KeyboardButton(labels[-1])])
+    btns = [[KeyboardButton(labels[i]), KeyboardButton(labels[i+1])] for i in range(0,len(labels)-1,2)]
+    if len(labels)%2: btns.append([KeyboardButton(labels[-1])])
     return ReplyKeyboardMarkup(btns, resize_keyboard=True)
 
 def experience_kb():
@@ -243,7 +238,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     text = update.message.text.strip()
 
-    # main menu buttons
     if text == "🔍 Знайти вакансії":
         await send_jobs_now(update, ctx); return
     if text == "⚙️ Налаштування":
@@ -258,8 +252,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"📊 Твій профіль:\n🏙️ Місто: {u['city']}\n💼 Професія: {u['profession_label']}\n"
                 f"🎓 Досвід: {u['experience']}\n💰 Зарплата: {u['salary']:,} грн\n🔔 Розклад: {u['schedule']}",
-                reply_markup=MAIN_KB
-            )
+                reply_markup=MAIN_KB)
         else:
             await update.message.reply_text("Профіль не знайдено. Напишіть /start")
         return
@@ -270,36 +263,28 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if step == "city":
         if text not in CITIES:
             await update.message.reply_text("Оберіть місто з кнопок 👇", reply_markup=city_kb()); return
-        state["city"] = text
-        state["step"] = "profession"
-        user_state[uid] = state
+        state["city"] = text; state["step"] = "profession"; user_state[uid] = state
         await update.message.reply_text("Крок 2/5 — Оберіть сферу роботи:", reply_markup=profession_kb())
 
     elif step == "profession":
         match = next((p for p in PROFESSIONS if p[0] == text), None)
         if not match:
             await update.message.reply_text("Оберіть сферу з кнопок 👇", reply_markup=profession_kb()); return
-        state["profession_label"] = match[0]
-        state["profession"]       = match[1]
-        state["step"] = "experience"
-        user_state[uid] = state
+        state["profession_label"] = match[0]; state["profession"] = match[1]
+        state["step"] = "experience"; user_state[uid] = state
         await update.message.reply_text("Крок 3/5 — Ваш досвід роботи:", reply_markup=experience_kb())
 
     elif step == "experience":
         if text not in EXPERIENCES:
             await update.message.reply_text("Оберіть досвід з кнопок 👇", reply_markup=experience_kb()); return
-        state["experience"] = text
-        state["step"] = "salary"
-        user_state[uid] = state
+        state["experience"] = text; state["step"] = "salary"; user_state[uid] = state
         await update.message.reply_text("Крок 4/5 — Бажана зарплата (±20% від обраної):", reply_markup=salary_kb())
 
     elif step == "salary":
-        num_str = re.sub(r"[^\d]", "", text)
+        num_str = re.sub(r"[^\d]","",text)
         if not num_str:
             await update.message.reply_text("Оберіть зарплату з кнопок 👇", reply_markup=salary_kb()); return
-        state["salary"] = int(num_str)
-        state["step"] = "schedule"
-        user_state[uid] = state
+        state["salary"] = int(num_str); state["step"] = "schedule"; user_state[uid] = state
         await update.message.reply_text("Крок 5/5 — Як часто отримувати вакансії?", reply_markup=schedule_kb())
 
     elif step == "schedule":
@@ -311,16 +296,13 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user_state.pop(uid, None)
         await update.message.reply_text(
             f"✅ Профіль збережено!\n\n"
-            f"🏙️ Місто: {state['city']}\n"
-            f"💼 Сфера: {state['profession_label']}\n"
-            f"🎓 Досвід: {state['experience']}\n"
-            f"💰 Зарплата: ~{state['salary']:,} грн\n"
-            f"🔔 Сповіщення: {state['schedule']}\n\n"
-            f"Використовуй кнопки нижче 👇",
+            f"🏙️ Місто: {state['city']}\n💼 Сфера: {state['profession_label']}\n"
+            f"🎓 Досвід: {state['experience']}\n💰 Зарплата: ~{state['salary']:,} грн\n"
+            f"🔔 Сповіщення: {state['schedule']}\n\nВикористовуй кнопки нижче 👇",
             reply_markup=MAIN_KB
         )
 
-# ── Fetch & Send ──────────────────────────────────────────────────────────────
+# ── Jobs ──────────────────────────────────────────────────────────────────────
 PHOTO_URLS = {
     "💻 IT / Програмування":    "https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=600",
     "📊 Аналітика / BI":        "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600",
@@ -345,141 +327,120 @@ PHOTO_URLS = {
     "🔍 Інше":                  "https://images.unsplash.com/photo-1486312338219-ce68d2c6f44d?w=600",
 }
 
-async def fetch_workua(city: str, keywords: str) -> list:
-    jobs = []
-    city_map = {
-        "Київ":"kyiv","Львів":"lviv","Харків":"kharkiv","Одеса":"odessa",
-        "Дніпро":"dnipro","Запоріжжя":"zaporizhzhia","Вінниця":"vinnytsia",
-        "Чернівці":"chernivtsi","Ужгород":"uzhhorod","Івано-Франківськ":"ivano-frankivsk",
-        "Тернопіль":"ternopil","Луцьк":"lutsk","Рівне":"rivne",
-        "Хмельницький":"khmelnytskyi","Житомир":"zhytomyr","Черкаси":"cherkasy",
-        "Кропивницький":"kropyvnytskyi","Суми":"sumy","Полтава":"poltava",
-        "Миколаїв":"mykolaiv","Херсон":"kherson","Ірпінь":"irpin","Буча":"bucha",
-    }
-    city_slug = city_map.get(city, "")
-    remote_extra = "?employment=74" if city == "Віддалено" else ""
-    base = f"https://www.work.ua/jobs-{city_slug}/" if city_slug else "https://www.work.ua/jobs/"
-    url  = base + remote_extra
+CITY_SLUGS = {
+    "Київ":"kyiv","Львів":"lviv","Харків":"kharkiv","Одеса":"odessa",
+    "Дніпро":"dnipro","Запоріжжя":"zaporizhzhia","Вінниця":"vinnytsia",
+    "Чернівці":"chernivtsi","Ужгород":"uzhhorod","Івано-Франківськ":"ivano-frankivsk",
+    "Тернопіль":"ternopil","Луцьк":"lutsk","Рівне":"rivne",
+    "Хмельницький":"khmelnytskyi","Житомир":"zhytomyr","Черкаси":"cherkasy",
+    "Кропивницький":"kropyvnytskyi","Суми":"sumy","Полтава":"poltava",
+    "Миколаїв":"mykolaiv","Херсон":"kherson","Ірпінь":"irpin","Буча":"bucha",
+}
 
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"}
+async def fetch_workua(city, keywords):
+    jobs = []
+    city_slug = CITY_SLUGS.get(city, "")
+    if city == "Віддалено":
+        url = "https://www.work.ua/jobs/?employment=74"
+    elif city_slug:
+        url = f"https://www.work.ua/jobs-{city_slug}/"
+    else:
+        url = "https://www.work.ua/jobs/"
+    headers = {"User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
     try:
         async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
             r = await client.get(url)
-            if r.status_code != 200:
-                return jobs
+            if r.status_code != 200: return jobs
             soup = BeautifulSoup(r.text, "lxml")
             for card in soup.select("div.card.card-hover.job-link")[:20]:
                 title_tag = card.select_one("h2 a")
-                if not title_tag:
-                    continue
+                if not title_tag: continue
                 title   = title_tag.get_text(strip=True)
                 link    = "https://www.work.ua" + title_tag["href"]
                 company = card.select_one(".add-top-xs")
                 company = company.get_text(strip=True) if company else "Компанія"
-                salary_tag = card.select_one(".h5.strong-600")
-                salary  = salary_tag.get_text(strip=True) if salary_tag else ""
+                sal_tag = card.select_one(".h5.strong-600")
+                salary  = sal_tag.get_text(strip=True) if sal_tag else ""
                 desc_tag = card.select_one("p.overflow.cut-bottom")
                 desc    = desc_tag.get_text(strip=True)[:200] if desc_tag else ""
                 job_id  = f"workua_{link.split('/')[-2]}"
                 if keywords:
                     kws = keywords.lower().split()
-                    combined = (title + " " + desc).lower()
-                    if not any(k in combined for k in kws):
-                        continue
-                jobs.append({"id": job_id, "title": title, "company": company,
-                              "salary": salary, "city": city, "desc": desc, "url": link, "source": "Work.ua"})
+                    if not any(k in (title+" "+desc).lower() for k in kws): continue
+                jobs.append({"id":job_id,"title":title,"company":company,"salary":salary,
+                             "city":city,"desc":desc,"url":link,"source":"Work.ua"})
     except Exception as e:
         logger.error(f"Work.ua error: {e}")
     return jobs
 
-async def fetch_dou(keywords: str) -> list:
+async def fetch_dou(keywords):
     jobs = []
-    url  = "https://jobs.dou.ua/vacancies/"
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"}
+    headers = {"User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
     try:
         async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
-            r = await client.get(url)
-            if r.status_code != 200:
-                return jobs
+            r = await client.get("https://jobs.dou.ua/vacancies/")
+            if r.status_code != 200: return jobs
             soup = BeautifulSoup(r.text, "lxml")
             for li in soup.select("li.l-vacancy")[:20]:
                 a = li.select_one("a.vt")
-                if not a:
-                    continue
+                if not a: continue
                 title   = a.get_text(strip=True)
                 link    = a["href"]
                 company = li.select_one(".company")
                 company = company.get_text(strip=True) if company else "Компанія"
                 city_tag = li.select_one(".cities")
                 city    = city_tag.get_text(strip=True) if city_tag else "Україна"
-                salary_tag = li.select_one(".salary")
-                salary  = salary_tag.get_text(strip=True) if salary_tag else ""
+                sal_tag = li.select_one(".salary")
+                salary  = sal_tag.get_text(strip=True) if sal_tag else ""
                 desc_tag = li.select_one(".sh-info")
                 desc    = desc_tag.get_text(strip=True)[:200] if desc_tag else ""
                 job_id  = f"dou_{link.split('/')[-2]}"
                 if keywords:
                     kws = keywords.lower().split()
-                    combined = (title + " " + desc).lower()
-                    if not any(k in combined for k in kws):
-                        continue
-                jobs.append({"id": job_id, "title": title, "company": company,
-                              "salary": salary, "city": city, "desc": desc, "url": link, "source": "DOU.ua"})
+                    if not any(k in (title+" "+desc).lower() for k in kws): continue
+                jobs.append({"id":job_id,"title":title,"company":company,"salary":salary,
+                             "city":city,"desc":desc,"url":link,"source":"DOU.ua"})
     except Exception as e:
         logger.error(f"DOU error: {e}")
     return jobs
 
-def salary_match(job_salary_str: str, user_salary: int) -> bool:
-    if not job_salary_str or not user_salary:
-        return True
-    nums = re.findall(r"\d[\d\s]*\d|\d+", job_salary_str.replace(" ", ""))
-    nums = [int(n.replace(" ", "")) for n in nums if len(n.replace(" ", "")) >= 4]
-    if not nums:
-        return True
-    low = min(nums); high = max(nums)
-    lo = user_salary * 0.8; hi = user_salary * 1.2
-    return not (high < lo or low > hi)
+def salary_match(job_salary_str, user_salary):
+    if not job_salary_str or not user_salary: return True
+    nums = re.findall(r"\d[\d\s]*\d|\d+", job_salary_str.replace(" ",""))
+    nums = [int(n.replace(" ","")) for n in nums if len(n.replace(" ",""))>=4]
+    if not nums: return True
+    lo = user_salary*0.8; hi = user_salary*1.2
+    return not (max(nums)<lo or min(nums)>hi)
 
-async def send_jobs_to_user(bot, user: dict):
-    city        = user["city"]
-    keywords    = user.get("profession", "")
-    user_salary = user.get("salary", 0)
-    prof_label  = user.get("profession_label", "🔍 Інше")
-    photo_url   = PHOTO_URLS.get(prof_label, PHOTO_URLS["🔍 Інше"])
-
+async def send_jobs_to_user(bot, user):
+    city      = user["city"]
+    keywords  = user.get("profession","")
+    u_salary  = user.get("salary",0)
+    prof      = user.get("profession_label","🔍 Інше")
+    photo_url = PHOTO_URLS.get(prof, PHOTO_URLS["🔍 Інше"])
     jobs = await fetch_workua(city, keywords)
     jobs += await fetch_dou(keywords)
-
     sent = 0
     for job in jobs:
-        if is_sent(user["user_id"], job["id"]):
-            continue
-        if not salary_match(job.get("salary",""), user_salary):
-            continue
-        city_display = job.get("city","") or city
-        if "дистанц" in city_display.lower() or "remote" in city_display.lower() or "home" in city_display.lower():
-            city_display = "Віддалено"
-        salary_display = job.get("salary","") or "не вказана"
-        caption = (
-            f"🆕 {job['title']}\n\n"
-            f"🏢 {job['company']}\n"
-            f"💰 {salary_display}\n"
-            f"📍 {city_display}\n"
-        )
+        if is_sent(user["user_id"], job["id"]): continue
+        if not salary_match(job.get("salary",""), u_salary): continue
+        city_d = job.get("city","") or city
+        if any(w in city_d.lower() for w in ["дистанц","remote","home","віддал"]):
+            city_d = "🌐 Віддалено"
+        sal_d = job.get("salary","") or "не вказана"
+        caption = f"🆕 {job['title']}\n\n🏢 {job['company']}\n💰 {sal_d}\n📍 {city_d}\n"
         if job.get("desc"):
             caption += f"\n📝 {job['desc'][:200]}\n"
         caption += f"\n🔗 {job['url']}\nДжерело: {job['source']}"
-        if len(caption) > 1024:
-            caption = caption[:1020] + "..."
+        if len(caption)>1024: caption=caption[:1020]+"..."
         try:
             await bot.send_photo(chat_id=user["user_id"], photo=photo_url, caption=caption)
             mark_sent(user["user_id"], job["id"])
             sent += 1
             await asyncio.sleep(0.5)
-            if sent >= 5:
-                break
+            if sent>=5: break
         except Exception as e:
-            logger.error(f"Send error to {user['user_id']}: {e}")
-            break
+            logger.error(f"Send error {user['user_id']}: {e}"); break
     logger.info(f"Надіслано {sent} вакансій юзеру {user['user_id']}")
     return sent
 
@@ -487,35 +448,32 @@ async def send_jobs_now(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     user = get_user(uid)
     if not user:
-        await update.message.reply_text("Спочатку налаштуй профіль — натисни /start")
-        return
+        await update.message.reply_text("Спочатку налаштуй профіль — натисни /start"); return
     await update.message.reply_text("🔍 Шукаю вакансії для тебе...", reply_markup=MAIN_KB)
     sent = await send_jobs_to_user(ctx.bot, user)
-    if sent == 0:
+    if sent==0:
         await update.message.reply_text("Нових вакансій поки немає. Спробуй пізніше!", reply_markup=MAIN_KB)
 
 async def scheduled_sender(ctx: ContextTypes.DEFAULT_TYPE):
     users = get_all_active_users()
     now   = datetime.utcnow()
+    schedule_hours = {
+        "Кожну годину": 1, "Кожні 3 години": 3,
+        "Кожні 6 годин": 6, "Раз на день": 24
+    }
     for user in users:
         sched = user.get("schedule","")
-        updated_at = user.get("updated_at")
-        if isinstance(updated_at, str):
-            try: updated_at = datetime.fromisoformat(updated_at)
-            except: updated_at = datetime.utcnow() - timedelta(hours=25)
-        elif updated_at is None:
-            updated_at = datetime.utcnow() - timedelta(hours=25)
-
-        if sched == "Кожну нову вакансію":
-            pass  # handled on new job detection
-        elif sched == "Кожну годину":
-            if (now - updated_at).total_seconds() < 3600: continue
-        elif sched == "Кожні 3 години":
-            if (now - updated_at).total_seconds() < 10800: continue
-        elif sched == "Кожні 6 годин":
-            if (now - updated_at).total_seconds() < 21600: continue
-        elif sched == "Раз на день":
-            if (now - updated_at).total_seconds() < 86400: continue
+        hours = schedule_hours.get(sched)
+        if hours:
+            updated_at = user.get("updated_at")
+            if isinstance(updated_at, str):
+                try: updated_at = datetime.fromisoformat(updated_at)
+                except: updated_at = now - timedelta(hours=hours+1)
+            elif updated_at is None:
+                updated_at = now - timedelta(hours=hours+1)
+            if (now - updated_at).total_seconds() < hours*3600: continue
+        elif sched != "Кожну нову вакансію":
+            continue
         await send_jobs_to_user(ctx.bot, user)
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -524,12 +482,25 @@ def main():
     app = Application.builder().token(PERSONAL_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",    start))
     app.add_handler(CommandHandler("jobs",     send_jobs_now))
-    app.add_handler(CommandHandler("settings", lambda u,c: (user_state.__setitem__(u.effective_user.id,{"step":"city"}), u.message.reply_text("Крок 1/5 — Місто:", reply_markup=city_kb()))))
-    app.add_handler(CommandHandler("stop",     lambda u,c: (deactivate_user(u.effective_user.id), u.message.reply_text("⛔ Зупинено."))))
+    app.add_handler(CommandHandler("settings", lambda u,c: handle_settings(u,c)))
+    app.add_handler(CommandHandler("stop",     lambda u,c: handle_stop(u,c)))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.job_queue.run_repeating(scheduled_sender, interval=3600, first=60)
+    if app.job_queue:
+        app.job_queue.run_repeating(scheduled_sender, interval=3600, first=60)
+        logger.info("Job queue enabled")
+    else:
+        logger.warning("Job queue not available - install python-telegram-bot[job-queue]")
     logger.info("Персональний бот запущено")
     app.run_polling(drop_pending_updates=True)
+
+async def handle_settings(update, ctx):
+    uid = update.effective_user.id
+    user_state[uid] = {"step":"city"}
+    await update.message.reply_text("Крок 1/5 — Місто:", reply_markup=city_kb())
+
+async def handle_stop(update, ctx):
+    deactivate_user(update.effective_user.id)
+    await update.message.reply_text("⛔ Сповіщення зупинено. /start щоб відновити.")
 
 if __name__ == "__main__":
     main()
