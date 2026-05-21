@@ -5,3 +5,4 @@ lxml
 playwright
 nest_asyncio
 psycopg2-binary
+# updated
