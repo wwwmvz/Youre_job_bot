@@ -2,6 +2,12 @@ import asyncio
 import sqlite3
 import logging
 import os
+try:
+    import psycopg2
+    import psycopg2.extras
+    USE_POSTGRES = bool(os.environ.get("DATABASE_URL"))
+except ImportError:
+    USE_POSTGRES = False
 import re
 from datetime import datetime
 from dataclasses import dataclass
@@ -135,112 +141,186 @@ SCHEDULE_INTERVALS = {
 }
 
 # ─── БАЗА ДАНИХ ──────────────────────────────────────────────────────────────
-def init_db():
+def get_db():
+    """Повертає з'єднання з БД (PostgreSQL або SQLite)."""
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        con = psycopg2.connect(db_url)
+        return con, "postgres"
     con = sqlite3.connect(DB_FILE)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            city TEXT,
-            profession TEXT,
-            experience TEXT,
-            salary TEXT,
-            schedule TEXT,
-            schedule_minutes INTEGER DEFAULT 60,
-            active INTEGER DEFAULT 1,
-            created_at TEXT,
-            last_sent TEXT
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS sent_jobs (
-            user_id INTEGER,
-            job_uid TEXT,
-            sent_at TEXT,
-            PRIMARY KEY (user_id, job_uid)
-        )
-    """)
+    return con, "sqlite"
+
+
+def init_db():
+    con, db_type = get_db()
+    cur = con.cursor()
+    if db_type == "postgres":
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                city TEXT,
+                profession TEXT,
+                profession_label TEXT,
+                experience TEXT,
+                salary TEXT,
+                schedule TEXT,
+                schedule_minutes INTEGER DEFAULT 60,
+                active INTEGER DEFAULT 1,
+                created_at TEXT,
+                last_sent TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sent_jobs (
+                user_id BIGINT,
+                job_uid TEXT,
+                sent_at TEXT,
+                PRIMARY KEY (user_id, job_uid)
+            )
+        """)
+    else:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                city TEXT,
+                profession TEXT,
+                profession_label TEXT,
+                experience TEXT,
+                salary TEXT,
+                schedule TEXT,
+                schedule_minutes INTEGER DEFAULT 60,
+                active INTEGER DEFAULT 1,
+                created_at TEXT,
+                last_sent TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sent_jobs (
+                user_id INTEGER,
+                job_uid TEXT,
+                sent_at TEXT,
+                PRIMARY KEY (user_id, job_uid)
+            )
+        """)
     con.commit()
+    cur.close()
     return con
 
 
 def save_user(con, user_id, data: dict):
     schedule = data.get("schedule", "🕐 Раз на годину")
     minutes = SCHEDULE_INTERVALS.get(schedule, 60)
-    # Створюємо таблицю з profession_label якщо ще немає
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            city TEXT,
-            profession TEXT,
-            profession_label TEXT,
-            experience TEXT,
-            salary TEXT,
-            schedule TEXT,
-            schedule_minutes INTEGER DEFAULT 60,
-            active INTEGER DEFAULT 1,
-            created_at TEXT,
-            last_sent TEXT
-        )
-    """)
-    # Додаємо колонку якщо не існує
-    try:
-        con.execute("ALTER TABLE users ADD COLUMN profession_label TEXT")
-    except Exception:
-        pass
-    con.execute("""
-        INSERT OR REPLACE INTO users
-        (user_id, city, profession, profession_label, experience, salary, schedule, schedule_minutes, active, created_at, last_sent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-    """, (
-        user_id,
-        data.get("city", ""),
-        data.get("profession", ""),
-        data.get("profession_label", data.get("profession", "")),
-        data.get("experience", ""),
-        data.get("salary", ""),
-        schedule,
-        minutes,
-        datetime.utcnow().isoformat(),
-        None
-    ))
+    db_url = os.environ.get("DATABASE_URL")
+    cur = con.cursor()
+    if db_url:
+        cur.execute("""
+            INSERT INTO users (user_id, city, profession, profession_label, experience, salary, schedule, schedule_minutes, active, created_at, last_sent)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1, %s, NULL)
+            ON CONFLICT (user_id) DO UPDATE SET
+                city=EXCLUDED.city, profession=EXCLUDED.profession,
+                profession_label=EXCLUDED.profession_label, experience=EXCLUDED.experience,
+                salary=EXCLUDED.salary, schedule=EXCLUDED.schedule,
+                schedule_minutes=EXCLUDED.schedule_minutes, active=1,
+                created_at=EXCLUDED.created_at
+        """, (
+            user_id, data.get("city", ""), data.get("profession", ""),
+            data.get("profession_label", data.get("profession", "")),
+            data.get("experience", ""), data.get("salary", ""),
+            schedule, minutes, datetime.utcnow().isoformat()
+        ))
+    else:
+        try:
+            con.execute("ALTER TABLE users ADD COLUMN profession_label TEXT")
+        except Exception:
+            pass
+        con.execute("""
+            INSERT OR REPLACE INTO users
+            (user_id, city, profession, profession_label, experience, salary, schedule, schedule_minutes, active, created_at, last_sent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)
+        """, (
+            user_id, data.get("city", ""), data.get("profession", ""),
+            data.get("profession_label", data.get("profession", "")),
+            data.get("experience", ""), data.get("salary", ""),
+            schedule, minutes, datetime.utcnow().isoformat()
+        ))
     con.commit()
+    cur.close()
 
 
 def get_user(con, user_id):
-    row = con.execute("SELECT * FROM users WHERE user_id=? AND active=1", (user_id,)).fetchone()
-    if not row:
-        return None
-    cursor = con.execute("PRAGMA table_info(users)")
-    cols = [r[1] for r in cursor.fetchall()]
+    db_url = os.environ.get("DATABASE_URL")
+    cur = con.cursor()
+    if db_url:
+        cur.execute("SELECT * FROM users WHERE user_id=%s AND active=1", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return None
+        cols = [d[0] for d in cur.description]
+    else:
+        cur.execute("SELECT * FROM users WHERE user_id=? AND active=1", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return None
+        cols = [d[0] for d in cur.description]
+    cur.close()
     return dict(zip(cols, row))
 
 
 def get_all_users(con):
-    rows = con.execute("SELECT * FROM users WHERE active=1").fetchall()
-    # Отримуємо назви колонок динамічно
-    cursor = con.execute("PRAGMA table_info(users)")
-    cols = [row[1] for row in cursor.fetchall()]
+    db_url = os.environ.get("DATABASE_URL")
+    cur = con.cursor()
+    if db_url:
+        cur.execute("SELECT * FROM users WHERE active=1")
+    else:
+        cur.execute("SELECT * FROM users WHERE active=1")
+    rows = cur.fetchall()
+    cols = [d[0] for d in cur.description]
+    cur.close()
     return [dict(zip(cols, r)) for r in rows]
 
 
 def is_job_sent(con, user_id, job_uid):
-    return con.execute(
-        "SELECT 1 FROM sent_jobs WHERE user_id=? AND job_uid=?", (user_id, job_uid)
-    ).fetchone() is not None
+    db_url = os.environ.get("DATABASE_URL")
+    cur = con.cursor()
+    if db_url:
+        cur.execute("SELECT 1 FROM sent_jobs WHERE user_id=%s AND job_uid=%s", (user_id, job_uid))
+    else:
+        cur.execute("SELECT 1 FROM sent_jobs WHERE user_id=? AND job_uid=?", (user_id, job_uid))
+    result = cur.fetchone()
+    cur.close()
+    return result is not None
 
 
 def mark_job_sent(con, user_id, job_uid):
-    con.execute(
-        "INSERT OR IGNORE INTO sent_jobs VALUES (?, ?, ?)",
-        (user_id, job_uid, datetime.utcnow().isoformat())
-    )
+    db_url = os.environ.get("DATABASE_URL")
+    cur = con.cursor()
+    if db_url:
+        cur.execute(
+            "INSERT INTO sent_jobs VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+            (user_id, job_uid, datetime.utcnow().isoformat())
+        )
+    else:
+        cur.execute(
+            "INSERT OR IGNORE INTO sent_jobs VALUES (?, ?, ?)",
+            (user_id, job_uid, datetime.utcnow().isoformat())
+        )
     con.commit()
+    cur.close()
 
 
 def update_last_sent(con, user_id):
-    con.execute("UPDATE users SET last_sent=? WHERE user_id=?",
-                (datetime.utcnow().isoformat(), user_id))
+    db_url = os.environ.get("DATABASE_URL")
+    cur = con.cursor()
+    if db_url:
+        cur.execute("UPDATE users SET last_sent=%s WHERE user_id=%s",
+                    (datetime.utcnow().isoformat(), user_id))
+    else:
+        cur.execute("UPDATE users SET last_sent=? WHERE user_id=?",
+                    (datetime.utcnow().isoformat(), user_id))
     con.commit()
+    cur.close()
 
 
 # ─── ПАРСЕРИ ─────────────────────────────────────────────────────────────────
@@ -622,7 +702,13 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     con = sqlite3.connect(DB_FILE)
-    con.execute("UPDATE users SET active=0 WHERE user_id=?", (user_id,))
+    db_url = os.environ.get("DATABASE_URL")
+    cur = con.cursor()
+    if db_url:
+        cur.execute("UPDATE users SET active=0 WHERE user_id=%s", (user_id,))
+    else:
+        cur.execute("UPDATE users SET active=0 WHERE user_id=?", (user_id,))
+    cur.close()
     con.commit()
     con.close()
     await update.message.reply_text(
