@@ -425,6 +425,35 @@ async def fetch_dou(keywords):
         logger.error(f"DOU error: {e}")
     return jobs
 
+
+async def fetch_job_desc(url: str, source: str) -> str:
+    """Fetch full job description from vacancy page."""
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
+    try:
+        async with httpx.AsyncClient(headers=headers, timeout=10, follow_redirects=True) as client:
+            r = await client.get(url)
+            if r.status_code != 200:
+                return ""
+            soup = BeautifulSoup(r.text, "lxml")
+            if source == "Work.ua":
+                desc = soup.select_one("#job-description")
+                if desc:
+                    text = desc.get_text(separator=" ", strip=True)
+                    # Find key requirements
+                    return text[:300]
+            elif source == "DOU.ua":
+                desc = soup.select_one(".b-typo.vacancy-section")
+                if not desc:
+                    desc = soup.select_one(".vacancy-description")
+                if not desc:
+                    desc = soup.select_one("article")
+                if desc:
+                    text = desc.get_text(separator=" ", strip=True)
+                    return text[:300]
+    except Exception as e:
+        logger.error(f"fetch_job_desc error: {e}")
+    return ""
+
 def salary_match(job_salary_str, user_salary):
     if not job_salary_str or not user_salary: return True
     nums = re.findall(r"\d[\d\s]*\d|\d+", job_salary_str.replace(" ",""))
@@ -441,21 +470,28 @@ async def send_jobs_to_user(bot, user):
     photo_url = PHOTO_URLS.get(prof, PHOTO_URLS["🔍 Інше"])
     jobs = await fetch_workua(city, keywords)
     jobs += await fetch_dou(keywords)
+    import random as _random
     sent = 0
     for job in jobs:
         if is_sent(user["user_id"], job["id"]): continue
         if not salary_match(job.get("salary",""), u_salary): continue
         city_d = job.get("city","") or city
         if any(w in city_d.lower() for w in ["дистанц","remote","home","віддал"]):
-            city_d = "🌐 Віддалено"
+            city_d = "Віддалено"
         sal_d = job.get("salary","") or "не вказана"
+        # Fetch real description from vacancy page
+        real_desc = await fetch_job_desc(job["url"], job["source"])
+        desc_text = real_desc or job.get("desc","")
+        # Add random seed to photo URL to avoid caching
+        seed = _random.randint(1, 9999)
+        photo = photo_url + f"&sig={seed}"
         caption = f"🆕 {job['title']}\n\n🏢 {job['company']}\n💰 {sal_d}\n📍 {city_d}\n"
-        if job.get("desc"):
-            caption += f"\n📝 {job['desc'][:200]}\n"
-        caption += f"\n🔗 {job['url']}\nДжерело: {job['source']}"
+        if desc_text:
+            caption += f"\n📝 {desc_text[:280]}\n"
+        caption += f"\n🔗 {job['url']}\n📌 {job['source']}"
         if len(caption)>1024: caption=caption[:1020]+"..."
         try:
-            await bot.send_photo(chat_id=user["user_id"], photo=photo_url, caption=caption)
+            await bot.send_photo(chat_id=user["user_id"], photo=photo, caption=caption)
             mark_sent(user["user_id"], job["id"])
             sent += 1
             await asyncio.sleep(0.5)
