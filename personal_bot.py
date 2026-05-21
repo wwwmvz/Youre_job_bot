@@ -553,7 +553,27 @@ async def send_jobs_to_user(bot, user):
         if any(w in city_d.lower() for w in ["дистанц","remote","home","віддал"]):
             city_d = "Віддалено"
         sal_d = job.get("salary","") or "не вказана"
-        desc_text = job.get("desc","")
+        desc_text = ""
+        if job.get("url"):
+            try:
+                async with httpx.AsyncClient(headers={"User-Agent":"Mozilla/5.0"}, timeout=5, follow_redirects=True) as dc:
+                    dr = await dc.get(job["url"])
+                    if dr.status_code == 200:
+                        from bs4 import BeautifulSoup as BS
+                        ds = BS(dr.text, "lxml")
+                        DUTY_KW = ["обов","функці","завдан","responsibilities","duties","what you","your role"]
+                        for tag in ds.find_all(["h2","h3","strong","b"]):
+                            if any(k in tag.get_text().lower() for k in DUTY_KW):
+                                parts = []
+                                for s in tag.find_next_siblings():
+                                    if s.name in ["h2","h3"]: break
+                                    t = s.get_text(" ", strip=True)
+                                    if t: parts.append(t)
+                                desc_text = " ".join(parts)[:400]
+                                if desc_text: break
+            except: pass
+        if not desc_text:
+            desc_text = job.get("desc","")
         photo = get_photo_url(prof, job["id"])
         caption = f"🆕 {job['title']}\n\n🏢 {job['company']}\n💰 {sal_d}\n📍 {city_d}\n"
         if desc_text:
