@@ -1,3 +1,21 @@
+import os, logging, asyncio, httpx, re
+from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import nest_asyncio
+
+nest_asyncio.apply()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
+
+PERSONAL_BOT_TOKEN = os.environ.get("PERSONAL_BOT_TOKEN", "8018911506:AAFPS_Jdw8MCYJ34M3UGnKvGoEV8PN7yRSQ")
+MAIN_CHANNEL       = os.environ.get("MAIN_CHANNEL",        "https://t.me/+YNCaw9gBllI5NzU0")
+DATABASE_URL       = os.environ.get("DATABASE_URL",        "")
+
+logger.info(f"DATABASE_URL present: {bool(DATABASE_URL)}")
+logger.info(f"TOKEN present: {bool(PERSONAL_BOT_TOKEN)}")
+
 
 PHOTO_IDS = {
     "💻 IT / Програмування": [0,1,2,3,4], "📊 Аналітика / BI": [20,21,22,23,24],
