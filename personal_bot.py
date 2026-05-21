@@ -546,7 +546,7 @@ async def fetch_duties_ai(url: str) -> str:
         
         response = await httpx.AsyncClient(timeout=10).post(
             "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "x-api-key": os.environ.get("ANTHROPIC_API_KEY",""), "anthropic-version": "2023-06-01"},
             json={
                 "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 200,
