@@ -103,27 +103,27 @@ PROFESSION_KEYWORDS = {
 }
 
 PROFESSION_PHOTOS = {
-    "💻 IT / Програмування": "https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=800",
-    "📊 Аналітика / Data": "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800",
-    "🎨 Дизайн / UX": "https://images.unsplash.com/photo-1558655146-d09347e92766?w=800",
-    "📱 Мобільна розробка": "https://images.unsplash.com/photo-1512941937669-90a1b58e7e9c?w=800",
-    "⚙️ DevOps / Адміністрування": "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?w=800",
-    "🧪 QA / Тестування": "https://images.unsplash.com/photo-1504868584819-f8e8b4b6d7e3?w=800",
-    "📢 Маркетинг / SMM": "https://images.unsplash.com/photo-1533750349088-cd871a92f312?w=800",
-    "💰 Продажі / Менеджмент": "https://images.unsplash.com/photo-1521791136064-7986c2920216?w=800",
-    "📞 Підтримка / Сервіс": "https://images.unsplash.com/photo-1486312338219-ce68d2c6f44d?w=800",
-    "🏦 Бухгалтерія / Фінанси": "https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=800",
-    "⚖️ Юриспруденція": "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?w=800",
-    "👥 HR / Рекрутинг": "https://images.unsplash.com/photo-1600880292203-757bb62b4baf?w=800",
-    "🚗 Водій / Кур'єр": "https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=800",
-    "📦 Склад / Логістика": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800",
-    "🏗️ Будівництво / Монтаж": "https://images.unsplash.com/photo-1504307651254-35680f356dfd?w=800",
-    "🍽️ HoReCa / Кухар": "https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=800",
-    "🛒 Торгівля / Касир": "https://images.unsplash.com/photo-1534452203293-494d7ddbf7e0?w=800",
-    "🏥 Медицина / Фармація": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=800",
-    "📚 Освіта / Викладання": "https://images.unsplash.com/photo-1503676260728-1c00da094a0b?w=800",
-    "🔒 Охорона / Безпека": "https://images.unsplash.com/photo-1605152276897-4f618f831968?w=800",
-    "🌐 Інше": "https://images.unsplash.com/photo-1497032628192-86f99bcd76bc?w=800",
+    "💻 IT / Програмування": "https://images.unsplash.com/photo-1461749280684-dccba630e2f6?w=800&fit=crop",
+    "📊 Аналітика / Data": "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&fit=crop",
+    "🎨 Дизайн / UX": "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=800&fit=crop",
+    "📱 Мобільна розробка": "https://images.unsplash.com/photo-1526498460520-4c246339dccb?w=800&fit=crop",
+    "⚙️ DevOps / Адміністрування": "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?w=800&fit=crop",
+    "🧪 QA / Тестування": "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800&fit=crop",
+    "📢 Маркетинг / SMM": "https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=800&fit=crop",
+    "💰 Продажі / Менеджмент": "https://images.unsplash.com/photo-1552664730-d307ca884978?w=800&fit=crop",
+    "📞 Підтримка / Сервіс": "https://images.unsplash.com/photo-1521791136064-7986c2920216?w=800&fit=crop",
+    "🏦 Бухгалтерія / Фінанси": "https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=800&fit=crop",
+    "⚖️ Юриспруденція": "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?w=800&fit=crop",
+    "👥 HR / Рекрутинг": "https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?w=800&fit=crop",
+    "🚗 Водій / Кур'єр": "https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=800&fit=crop",
+    "📦 Склад / Логістика": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800&fit=crop",
+    "🏗️ Будівництво / Монтаж": "https://images.unsplash.com/photo-1504307651254-35680f356dfd?w=800&fit=crop",
+    "🍽️ HoReCa / Кухар": "https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=800&fit=crop",
+    "🛒 Торгівля / Касир": "https://images.unsplash.com/photo-1601598851547-4302969d0614?w=800&fit=crop",
+    "🏥 Медицина / Фармація": "https://images.unsplash.com/photo-1576091160550-2173dba999ef?w=800&fit=crop",
+    "📚 Освіта / Викладання": "https://images.unsplash.com/photo-1523580494863-6f3031224c94?w=800&fit=crop",
+    "🔒 Охорона / Безпека": "https://images.unsplash.com/photo-1582139329536-e7284fece509?w=800&fit=crop",
+    "🌐 Інше": "https://images.unsplash.com/photo-1521737711867-e3b97375f902?w=800&fit=crop",
 }
 
 SCHEDULE_INTERVALS = {
@@ -166,14 +166,36 @@ def init_db():
 def save_user(con, user_id, data: dict):
     schedule = data.get("schedule", "🕐 Раз на годину")
     minutes = SCHEDULE_INTERVALS.get(schedule, 60)
+    # Створюємо таблицю з profession_label якщо ще немає
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            city TEXT,
+            profession TEXT,
+            profession_label TEXT,
+            experience TEXT,
+            salary TEXT,
+            schedule TEXT,
+            schedule_minutes INTEGER DEFAULT 60,
+            active INTEGER DEFAULT 1,
+            created_at TEXT,
+            last_sent TEXT
+        )
+    """)
+    # Додаємо колонку якщо не існує
+    try:
+        con.execute("ALTER TABLE users ADD COLUMN profession_label TEXT")
+    except Exception:
+        pass
     con.execute("""
         INSERT OR REPLACE INTO users
-        (user_id, city, profession, experience, salary, schedule, schedule_minutes, active, created_at, last_sent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        (user_id, city, profession, profession_label, experience, salary, schedule, schedule_minutes, active, created_at, last_sent)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
     """, (
         user_id,
         data.get("city", ""),
         data.get("profession", ""),
+        data.get("profession_label", data.get("profession", "")),
         data.get("experience", ""),
         data.get("salary", ""),
         schedule,
@@ -188,13 +210,16 @@ def get_user(con, user_id):
     row = con.execute("SELECT * FROM users WHERE user_id=? AND active=1", (user_id,)).fetchone()
     if not row:
         return None
-    cols = ["user_id", "city", "profession", "experience", "salary", "schedule", "schedule_minutes", "active", "created_at", "last_sent"]
+    cursor = con.execute("PRAGMA table_info(users)")
+    cols = [r[1] for r in cursor.fetchall()]
     return dict(zip(cols, row))
 
 
 def get_all_users(con):
     rows = con.execute("SELECT * FROM users WHERE active=1").fetchall()
-    cols = ["user_id", "city", "profession", "experience", "salary", "schedule", "schedule_minutes", "active", "created_at", "last_sent"]
+    # Отримуємо назви колонок динамічно
+    cursor = con.execute("PRAGMA table_info(users)")
+    cols = [row[1] for row in cursor.fetchall()]
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -391,8 +416,10 @@ def format_job(job: Job, short: bool = False) -> str:
     lines.append(f"📍 {job.location}")
     if job.experience:
         lines.append(f"🎓 Досвід: {job.experience}")
-    if job.description and not short:
-        lines.append(f"\n📝 {job.description[:200]}…")
+    # Завжди показуємо опис якщо є (коротший для фото через ліміт підпису)
+    if job.description:
+        desc = job.description[:180] + "…" if len(job.description) > 180 else job.description
+        lines.append(f"\n📝 {desc}")
     lines.append(f"\n🔗 <a href='{job.url}'>Переглянути вакансію</a>")
     lines.append(f"<i>Джерело: {job.source}</i>")
     return "\n".join(lines)
