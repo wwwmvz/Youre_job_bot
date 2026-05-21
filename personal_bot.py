@@ -56,9 +56,8 @@ def get_photo_url(prof_label, job_id):
         "🎯 HR / Рекрутинг": "recruitment,hr,teamwork",
         "🔍 Інше": "office,work,business",
     }
-    kw = keywords.get(prof_label, "office,work")
     seed = int(hashlib.md5(job_id.encode()).hexdigest()[:8], 16) % 1000
-    return f"https://source.unsplash.com/600x400/?{kw}&{seed}"
+    return f"https://picsum.photos/seed/{seed}/600/400"
 
 def get_db():
     if DATABASE_URL:
