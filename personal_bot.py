@@ -561,7 +561,7 @@ async def send_jobs_to_user(bot, user):
                     if dr.status_code == 200:
                         from bs4 import BeautifulSoup as BS
                         ds = BS(dr.text, "lxml")
-                        DUTY_KW = ["обов","функці","завдан","responsibilities","duties","what you","your role"]
+                        DUTY_KW = ["обов","функці","завдан","відповідальност","зона","що потрібно","що ти будеш","твої задачі","responsibilities","duties","what you","your role","you will"]
                         for tag in ds.find_all(["h2","h3","strong","b"]):
                             if any(k in tag.get_text().lower() for k in DUTY_KW):
                                 parts = []
