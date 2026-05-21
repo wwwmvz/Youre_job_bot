@@ -385,9 +385,6 @@ async def fetch_workua(city, keywords):
                 desc_tag = card.select_one("p.overflow.cut-bottom")
                 desc    = desc_tag.get_text(strip=True)[:200] if desc_tag else ""
                 job_id  = f"workua_{link.split('/')[-2]}"
-                if keywords:
-                    kws = keywords.lower().split()
-                    if not any(k in (title+" "+desc).lower() for k in kws): continue
                 jobs.append({"id":job_id,"title":title,"company":company,"salary":salary,
                              "city":city,"desc":desc,"url":link,"source":"Work.ua"})
     except Exception as e:
@@ -416,9 +413,6 @@ async def fetch_dou(keywords):
                 desc_tag = li.select_one(".sh-info")
                 desc    = desc_tag.get_text(strip=True)[:200] if desc_tag else ""
                 job_id  = f"dou_{link.split('/')[-2]}"
-                if keywords:
-                    kws = keywords.lower().split()
-                    if not any(k in (title+" "+desc).lower() for k in kws): continue
                 jobs.append({"id":job_id,"title":title,"company":company,"salary":salary,
                              "city":city,"desc":desc,"url":link,"source":"DOU.ua"})
     except Exception as e:
