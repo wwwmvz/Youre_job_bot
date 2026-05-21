@@ -15,29 +15,33 @@ PHOTO_IDS = {
 
 def get_photo_url(prof_label, job_id):
     import hashlib
-    ids = PHOTO_IDS.get(prof_label, PHOTO_IDS["🔍 Інше"])
-    idx = int(hashlib.md5(job_id.encode()).hexdigest(), 16) % len(ids)
-    return f"https://picsum.photos/seed/{ids[idx]}/600/400"
+    photos = {
+        "💻 IT / Програмування": ["1461749280684-dccba630e2f6","1517694526182-a3b56df938b5","1498050108023-c5249f4df085","1607799279861-4dd421887fb3","1574717024606-dae2a0cb6819"],
+        "📊 Аналітика / BI": ["1551288049-bebda4e38f71","1460925895917-afdab827c52f","1504868584819-f8e8b4b6d7e3","1543286386-713bdd548da4","1611974789855-9c702cb48cd1"],
+        "🎨 Дизайн / UX": ["1561070791-2526d30994b5","1572044162444-ad60f128bdea","1558655146-9f40138edfeb","1509343256851-b9cfe7e1d0e0","1626785774573-4b799315d085"],
+        "📢 Маркетинг / SMM": ["1432888622747-4eb9a8f2c293","1611926653458-09294b3142bf","1533750349088-cd871a92f312","1562577309-4f401e407c40","1504270997636-07ddfee295cc"],
+        "💰 Продажі / Sales": ["1556742049-0cfed4f6a45d","1521791136064-7986c2920216","1450101499163-c8848c66ca85","1507003211169-0a1dd7228f2d","1600880292203-757bb62b4baf"],
+        "🔧 Технічна підтримка": ["1518770660439-4636190af475","1516321318423-f06f85e504b3","1581092580497-e0d23cbdf1dc","1573164713714-d95e436ab8d6","1563986768609-322da13575f3"],
+        "📦 Логістика / Склад": ["1553413077-190dd305871c","1586528116311-ad8dd3c8310d","1565891741441-64a91b4d0b24","1578575437130-527eed3abbec","1494412574643-ff11b0a5bcc1"],
+        "👷 Будівництво": ["1504307651254-35680f356dfd","1503387762-592deb58ef4e","1541888946425-d81bb19240f5","1590254553861-cdaea28b0d5a","1487452066049-d5b9f3e9a7c7"],
+        "🏥 Медицина": ["1559757148-5c350d0d3c56","1584308666744-24d5c474f2ae","1530026405845-2c22ac7f4598","1579684385127-1ef15d508118","1638202993928-7267aad84c31"],
+        "🍽️ HoReCa / Ресторан": ["1414235077428-338989a2e8c0","1504674900247-0877df9cc836","1466978913421-dad2ebd01d17","1600891964599-f61ba0e24d30","1581349485608-9469926a8e5e"],
+        "🛒 Рітейл / Торгівля": ["1534452203293-494d7ddbf7e0","1441986300917-64674bd600d8","1472851294608-062f824d29cc","1607082349566-187f3e459ea5","1556742111-a301d3f829c2"],
+        "📚 Освіта": ["1524178232363-1fb2b075b655","1503676260728-1c00da094a0b","1456513080510-7bf3a84b82f8","1427504494785-3a9ca7044f45","1580582932707-520aed937b7b"],
+        "🏦 Фінанси / Бухгалтерія": ["1554224155-6726b3ff858f","1518458028785-8fbcd101ebb9","1565514020179-026b92b84bb6","1579621970563-ebec7560ff3e","1611974789855-9c702cb48cd1"],
+        "⚖️ Юриспруденція": ["1589829545856-d10d557cf95f","1453945351272-5ba40af7e83c","1505664194779-8beaceb77a2a","1507679799987-c73779587ccf","1589829153037-3f0bfe6c8fdf"],
+        "🧹 Прибирання / Клінінг": ["1581578731548-c64695cc6952","1563453392212-326f5e854473","1527515637462-cff94ece8c3d","1585771724684-38269d6639fd","1556909114-44e3e9399a2f"],
+        "🚗 Водій": ["1449965408869-eaa3f722e40d","1558618666-fcd25c85cd64","1568605117036-5f4e4e7e3bba","1601584672306-2a3ac95f67b0","1494976388531-d1058fd9eda2"],
+        "🌾 Сільське господарство": ["1500382017468-9049fed747ef","1464226184884-fa280b87c399","1495107334328-5a075d5b0207","1574943320219-b9f3b5e4b54e","1625246333195-b8f4fcf2dded"],
+        "🔨 Виробництво": ["1565793979853-c7c98049571f","1581091226825-a6a2a5aee158","1504917595217-d4dc5ebe6122","1518709268805-4e9042af9f23","1567789884554-0bb58d14afdc"],
+        "📞 Кол-центр / Оператор": ["1521791055366-0d553872952f","1534536281715-e28d76689b4d","1549923746-c502d488b3ea","1560264280-088b68371d7d","1587614382346-4ec70e388b28"],
+        "🎯 HR / Рекрутинг": ["1521737604893-d14cc237f11d","1573496359142-b8d87734a5a2","1552664730-d307ca884978","1542744173-8e7e53415bb0","1565688504172-7842cb0088e1"],
+    }
+    default = ["1486312338219-ce68d2c6f44d","1499750310107-5fef28a66643","1454165804606-c3d57bc86b40","1497366216548-37526070297c","1507679799987-c73779587ccf"]
+    pl = photos.get(prof_label, default)
+    idx = int(hashlib.md5(job_id.encode()).hexdigest()[:8], 16) % len(pl)
+    return f"https://images.unsplash.com/photo-{pl[idx]}?w=600&q=80"
 
-import os, logging, asyncio, httpx, re
-from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import nest_asyncio
-
-nest_asyncio.apply()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
-
-PERSONAL_BOT_TOKEN = os.environ.get("PERSONAL_BOT_TOKEN", "8018911506:AAFPS_Jdw8MCYJ34M3UGnKvGoEV8PN7yRSQ")
-MAIN_CHANNEL       = os.environ.get("MAIN_CHANNEL",        "https://t.me/+YNCaw9gBllI5NzU0")
-DATABASE_URL       = os.environ.get("DATABASE_URL",        "")
-
-logger.info(f"DATABASE_URL present: {bool(DATABASE_URL)}")
-logger.info(f"TOKEN present: {bool(PERSONAL_BOT_TOKEN)}")
-
-# ── DB ────────────────────────────────────────────────────────────────────────
 def get_db():
     if DATABASE_URL:
         try:
