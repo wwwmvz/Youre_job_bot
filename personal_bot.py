@@ -427,29 +427,68 @@ async def fetch_dou(keywords):
 
 
 async def fetch_job_desc(url: str, source: str) -> str:
-    """Fetch full job description from vacancy page."""
+    """Fetch job duties/responsibilities from vacancy page."""
     headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
+    # Keywords that signal duties section
+    DUTY_KEYWORDS = [
+        "обов'язки", "обовязки", "що потрібно робити", "функції", "задачі", "завдання",
+        "responsibilities", "duties", "what you'll do", "your role",
+        "вимоги", "що ми шукаємо", "requirements", "що потрібно"
+    ]
     try:
         async with httpx.AsyncClient(headers=headers, timeout=10, follow_redirects=True) as client:
             r = await client.get(url)
             if r.status_code != 200:
                 return ""
             soup = BeautifulSoup(r.text, "lxml")
+
             if source == "Work.ua":
-                desc = soup.select_one("#job-description")
-                if desc:
-                    text = desc.get_text(separator=" ", strip=True)
-                    # Find key requirements
-                    return text[:300]
+                block = soup.select_one("#job-description")
+                if not block:
+                    return ""
+                # Try to find duties section by heading
+                for tag in block.find_all(["h2","h3","h4","strong","b"]):
+                    heading = tag.get_text(strip=True).lower()
+                    if any(kw in heading for kw in DUTY_KEYWORDS):
+                        # Collect text after this heading
+                        parts = []
+                        for sib in tag.find_next_siblings():
+                            if sib.name in ["h2","h3","h4"] and sib != tag:
+                                break
+                            parts.append(sib.get_text(separator=" ", strip=True))
+                        text = " ".join(parts).strip()
+                        if text:
+                            return text[:300]
+                # Fallback: return first 300 chars skipping company intro
+                full = block.get_text(separator=" ", strip=True)
+                # Skip first sentence if it looks like company description
+                sentences = full.split(". ")
+                if len(sentences) > 2:
+                    full = ". ".join(sentences[1:])
+                return full[:300]
+
             elif source == "DOU.ua":
-                desc = soup.select_one(".b-typo.vacancy-section")
-                if not desc:
-                    desc = soup.select_one(".vacancy-description")
-                if not desc:
-                    desc = soup.select_one("article")
-                if desc:
-                    text = desc.get_text(separator=" ", strip=True)
+                # DOU has sections with headers
+                sections = soup.select(".b-typo.vacancy-section")
+                for section in sections:
+                    header = section.select_one("h2, h3, strong")
+                    if header:
+                        heading = header.get_text(strip=True).lower()
+                        if any(kw in heading for kw in DUTY_KEYWORDS):
+                            text = section.get_text(separator=" ", strip=True)
+                            # Remove the heading itself
+                            text = text.replace(header.get_text(strip=True), "").strip()
+                            return text[:300]
+                # Fallback: second section (first is usually about company)
+                if len(sections) >= 2:
+                    text = sections[1].get_text(separator=" ", strip=True)
                     return text[:300]
+                elif sections:
+                    full = sections[0].get_text(separator=" ", strip=True)
+                    sentences = full.split(". ")
+                    if len(sentences) > 2:
+                        full = ". ".join(sentences[1:])
+                    return full[:300]
     except Exception as e:
         logger.error(f"fetch_job_desc error: {e}")
     return ""
@@ -467,10 +506,9 @@ async def send_jobs_to_user(bot, user):
     keywords  = user.get("profession","")
     u_salary  = user.get("salary",0)
     prof      = user.get("profession_label","🔍 Інше")
-    photo_url = PHOTO_URLS.get(prof, PHOTO_URLS["🔍 Інше"])
+    # photo_url set per job below
     jobs = await fetch_workua(city, keywords)
     jobs += await fetch_dou(keywords)
-    import random as _random
     sent = 0
     for job in jobs:
         if is_sent(user["user_id"], job["id"]): continue
@@ -482,9 +520,7 @@ async def send_jobs_to_user(bot, user):
         # Fetch real description from vacancy page
         real_desc = await fetch_job_desc(job["url"], job["source"])
         desc_text = real_desc or job.get("desc","")
-        # Add random seed to photo URL to avoid caching
-        seed = _random.randint(1, 9999)
-        photo = photo_url + f"&sig={seed}"
+        photo = get_photo_url(prof, job["id"])
         caption = f"🆕 {job['title']}\n\n🏢 {job['company']}\n💰 {sal_d}\n📍 {city_d}\n"
         if desc_text:
             caption += f"\n📝 {desc_text[:280]}\n"
