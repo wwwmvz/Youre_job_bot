@@ -511,9 +511,7 @@ async def send_jobs_to_user(bot, user):
         if any(w in city_d.lower() for w in ["дистанц","remote","home","віддал"]):
             city_d = "Віддалено"
         sal_d = job.get("salary","") or "не вказана"
-        # Fetch real description from vacancy page
-        real_desc = await fetch_job_desc(job["url"], job["source"])
-        desc_text = real_desc or job.get("desc","")
+        desc_text = job.get("desc","")
         photo = get_photo_url(prof, job["id"])
         caption = f"🆕 {job['title']}\n\n🏢 {job['company']}\n💰 {sal_d}\n📍 {city_d}\n"
         if desc_text:
