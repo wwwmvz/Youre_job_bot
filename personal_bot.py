@@ -1,10 +1,12 @@
-import os, logging, asyncio, httpx, re
+import os, logging, asyncio, httpx, re, json
 from dotenv import load_dotenv
 load_dotenv()
 from datetime import datetime, timedelta
+from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.error import RetryAfter
 import nest_asyncio
 
 nest_asyncio.apply()
@@ -319,6 +321,10 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     state = user_state.get(uid, {})
     step  = state.get("step")
+
+    if not step:
+        await keyword_search(update, ctx, text)
+        return
 
     if step == "city":
         if text not in CITIES:
@@ -640,6 +646,146 @@ async def send_jobs_to_user(bot, user):
             logger.error(f"Send error {user['user_id']}: {e}"); break
     logger.info(f"Надіслано {sent} вакансій юзеру {user['user_id']}")
     return sent
+
+async def fetch_djinni_search(keyword: str) -> list:
+    jobs = []
+    kw_lower = keyword.lower()
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+               "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.7"}
+    try:
+        async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
+            for page in range(1, 3):
+                url = f"https://djinni.co/jobs/?q={quote_plus(keyword)}" if page == 1 else f"https://djinni.co/jobs/?q={quote_plus(keyword)}&page={page}"
+                r = await client.get(url)
+                if r.status_code != 200:
+                    break
+                soup = BeautifulSoup(r.text, "html.parser")
+                scripts = soup.find_all("script", type="application/ld+json")
+                found = False
+                for s in scripts:
+                    try:
+                        data = json.loads(s.string or "")
+                    except Exception:
+                        continue
+                    if not isinstance(data, list):
+                        continue
+                    for item in data:
+                        if item.get("@type") != "JobPosting":
+                            continue
+                        found = True
+                        title = item.get("title", "")
+                        desc_raw = item.get("description", "")
+                        if kw_lower not in title.lower() and kw_lower not in desc_raw.lower():
+                            continue
+                        url_job = item.get("url", "")
+                        org = item.get("hiringOrganization") or {}
+                        company = org.get("name", "Компанія") if isinstance(org, dict) else "Компанія"
+                        is_remote = item.get("jobLocationType") == "TELECOMMUTE"
+                        city = "Віддалено" if is_remote else "Україна"
+                        sal_data = item.get("baseSalary") or {}
+                        salary = ""
+                        if isinstance(sal_data, dict):
+                            val = sal_data.get("value") or {}
+                            if isinstance(val, dict):
+                                mn, mx, cur = val.get("minValue"), val.get("maxValue"), sal_data.get("currency", "USD")
+                                if mn and mx:
+                                    salary = f"{mn}–{mx} {cur}"
+                                elif mn or mx:
+                                    salary = f"{mn or mx} {cur}"
+                        job_id = "djinni_" + url_job.rstrip("/").split("/")[-1]
+                        jobs.append({"id": job_id, "title": title, "company": company,
+                                     "salary": salary, "city": city, "desc": desc_raw[:200],
+                                     "url": url_job, "source": "Djinni"})
+                if not found:
+                    break
+    except Exception as e:
+        logger.error(f"Djinni search error: {e}")
+    return jobs
+
+
+async def fetch_jobs_ua_search(keyword: str) -> list:
+    jobs = []
+    kw_lower = keyword.lower()
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+    try:
+        async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
+            r = await client.get(f"https://jobs.ua/ukr/vacancy/?search_phrase={quote_plus(keyword)}")
+            if r.status_code != 200:
+                return jobs
+            soup = BeautifulSoup(r.text, "html.parser")
+            for card in soup.select("li.b-vacancy__item"):
+                a = card.select_one("a.b-vacancy__top__title")
+                if not a:
+                    continue
+                title = a.get_text(strip=True)
+                if kw_lower not in title.lower():
+                    continue
+                href = a.get("href", "")
+                uid_part = href.rstrip("/").split("-")[-1]
+                sal_el = card.select_one("span.b-vacancy__top__pay")
+                salary = re.sub(r"\s+", " ", sal_el.get_text(strip=True)) if sal_el else ""
+                tech = card.select("span.b-vacancy__tech__item")
+                company = tech[0].get_text(strip=True) if tech else "Компанія"
+                location = ""
+                for item in tech[1:]:
+                    if item.select_one("i.fa-map-marker"):
+                        loc_a = item.select_one("a")
+                        location = loc_a.get_text(strip=True) if loc_a else ""
+                        break
+                jobs.append({"id": f"jobs_{uid_part}", "title": title, "company": company,
+                             "salary": salary, "city": location or "Україна",
+                             "desc": "", "url": href, "source": "Jobs.ua"})
+    except Exception as e:
+        logger.error(f"Jobs.ua search error: {e}")
+    return jobs
+
+
+async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str):
+    await update.message.reply_text(f"🔍 Шукаю «{keyword}»...", reply_markup=MAIN_KB)
+    kw_lower = keyword.lower()
+
+    dou_results = await fetch_dou(keyword)
+    dou_filtered = [j for j in dou_results if kw_lower in j["title"].lower() or kw_lower in j.get("desc","").lower()]
+    djinni_results = await fetch_djinni_search(keyword)
+    jobsua_results = await fetch_jobs_ua_search(keyword)
+
+    all_jobs = dou_filtered + djinni_results + jobsua_results
+
+    seen = set()
+    unique = []
+    for job in all_jobs:
+        key = re.sub(r"[^\w]", "", job["title"].lower())
+        if key not in seen:
+            seen.add(key)
+            unique.append(job)
+
+    if not unique:
+        await update.message.reply_text(
+            f"😔 Нічого не знайдено по запиту «{keyword}».\nСпробуйте інше ключове слово.",
+            reply_markup=MAIN_KB
+        )
+        return
+
+    await update.message.reply_text(f"✅ Знайдено {len(unique[:10])} вакансій по запиту «{keyword}»:")
+    for i, job in enumerate(unique[:10], 1):
+        city_d = job.get("city", "Україна")
+        loc = "🌐 Віддалено" if any(w in city_d.lower() for w in ["дистанц","remote","віддал"]) else f"📍 {city_d}"
+        sal = f"💰 {job['salary']}" if job.get("salary") else ""
+        text = f"<b>{i}. {job['title']}</b>\n🏢 {job['company']}\n{loc}"
+        if sal:
+            text += f"\n{sal}"
+        text += f"\n🔗 <a href='{job['url']}'>{job['source']}</a>"
+        try:
+            await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+            await asyncio.sleep(0.5)
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)
+            await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+        except Exception as e:
+            logger.error(f"Search send error: {e}")
+
 
 async def send_jobs_now(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id

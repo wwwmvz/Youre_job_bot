@@ -471,10 +471,13 @@ async def search_jobs(client: httpx.AsyncClient, keyword: str) -> list:
         parse_jobs_ua(client, keyword=keyword),
         return_exceptions=True,
     )
+    kw_lower = keyword.lower()
     all_jobs = []
     for r in results:
         if isinstance(r, list):
-            all_jobs.extend(r)
+            for job in r:
+                if kw_lower in job.title.lower() or kw_lower in job.description.lower():
+                    all_jobs.append(job)
     seen_keys: set[str] = set()
     unique = []
     for job in all_jobs:
