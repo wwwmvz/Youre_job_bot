@@ -747,7 +747,7 @@ async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword
     kw_lower = keyword.lower()
 
     dou_results = await fetch_dou(keyword)
-    dou_filtered = [j for j in dou_results if kw_lower in j["title"].lower() or kw_lower in j.get("desc","").lower()]
+    dou_filtered = [j for j in dou_results if kw_lower in j["title"].lower()]
     djinni_results = await fetch_djinni_search(keyword)
     jobsua_results = await fetch_jobs_ua_search(keyword)
 
@@ -772,11 +772,15 @@ async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword
     for i, job in enumerate(unique[:10], 1):
         city_d = job.get("city", "Україна")
         loc = "🌐 Віддалено" if any(w in city_d.lower() for w in ["дистанц","remote","віддал"]) else f"📍 {city_d}"
-        sal = f"💰 {job['salary']}" if job.get("salary") else ""
-        text = f"<b>{i}. {job['title']}</b>\n🏢 {job['company']}\n{loc}"
-        if sal:
-            text += f"\n{sal}"
-        text += f"\n🔗 <a href='{job['url']}'>{job['source']}</a>"
+        lines = [f"<b>{i}. {job['title']}</b>", f"🏢 {job['company']}", loc]
+        if job.get("salary"):
+            lines.append(f"💰 {job['salary']}")
+        if job.get("desc"):
+            desc = job['desc'][:180] + "…" if len(job.get('desc','')) > 180 else job.get('desc','')
+            if desc:
+                lines.append(f"\n📝 {desc}")
+        lines.append(f"\n🔗 <a href='{job['url']}'>Переглянути ({job['source']})</a>")
+        text = "\n".join(lines)
         try:
             await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
             await asyncio.sleep(0.5)

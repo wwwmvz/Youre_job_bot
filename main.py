@@ -476,7 +476,7 @@ async def search_jobs(client: httpx.AsyncClient, keyword: str) -> list:
     for r in results:
         if isinstance(r, list):
             for job in r:
-                if kw_lower in job.title.lower() or kw_lower in job.description.lower():
+                if kw_lower in job.title.lower():
                     all_jobs.append(job)
     seen_keys: set[str] = set()
     unique = []
@@ -522,33 +522,48 @@ def format_job(job: Job) -> str:
 
 
 def format_job_search(job: Job, index: int) -> str:
-    """Компактний формат для результатів пошуку."""
     _, _, is_remote = normalize_location(job.location)
     loc = "🌐 Віддалено" if is_remote else f"📍 {job.location.split(',')[0].strip()}"
-    salary = f"💰 {job.salary}" if job.salary else ""
     parts = [f"<b>{index}. {job.title}</b>"]
     if job.company and job.company != "—":
         parts.append(f"🏢 {job.company}")
     parts.append(loc)
-    if salary:
-        parts.append(salary)
-    parts.append(f"🔗 <a href='{job.url}'>{job.source}</a>")
+    if job.salary:
+        parts.append(f"💰 {job.salary}")
+    if job.experience:
+        parts.append(f"🎓 {job.experience}")
+    if job.description:
+        desc = job.description[:200] + "…" if len(job.description) > 200 else job.description
+        parts.append(f"\n📝 {desc}")
+    parts.append(f"\n🔗 <a href='{job.url}'>Переглянути ({job.source})</a>")
     return "\n".join(parts)
 
 
 # ─── TELEGRAM HANDLERS ───────────────────────────────────────────────────────
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "👋 Привіт! Я бот пошуку вакансій по Україні.\n\n"
-        "🔍 <b>Як шукати:</b>\n"
-        "Просто напишіть ключове слово або фразу, наприклад:\n"
-        "  • <code>python developer</code>\n"
+        "👋 <b>Привіт! Я бот пошуку вакансій по Україні.</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🔍 <b>Пошук по ключовому слову:</b>\n"
+        "Просто напишіть що шукаєте:\n"
         "  • <code>бухгалтер</code>\n"
-        "  • <code>водій Київ</code>\n\n"
-        "📢 Або підпишіться на канал — нові вакансії публікуються автоматично кожні 30 хв.\n\n"
-        "Джерела: DOU.ua • Djinni.co • Jobs.ua"
+        "  • <code>python developer</code>\n"
+        "  • <code>менеджер з продажу</code>\n"
+        "  • <code>водій</code>\n\n"
+        "або використайте команду:\n"
+        "<code>/search бухгалтер</code>\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "📢 <b>Канал з вакансіями:</b>\n"
+        "Нові вакансії публікуються автоматично кожні 30 хв.\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "📌 <b>Джерела:</b> DOU.ua • Djinni.co • Jobs.ua\n\n"
+        "/help — показати цю інструкцію"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_start(update, context)
 
 
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -646,6 +661,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("search", cmd_search))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_search))
     app.job_queue.run_repeating(post_auto_jobs, interval=CHECK_INTERVAL, first=30)
