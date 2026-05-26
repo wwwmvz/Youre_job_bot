@@ -18,18 +18,23 @@ MAIN_CHANNEL       = os.environ.get("MAIN_CHANNEL", "https://t.me/+YNCaw9gBllI5N
 DATABASE_URL       = os.environ.get("DATABASE_URL",        "")
 # Public Telegram job channels (username without @) — verified working
 TG_JOB_CHANNELS = [
+    # IT
     "djinni_jobs",       # Djinni — IT вакансії
     "dou_jobs",          # DOU Jobs — DevOps / SysAdmin / IT
-    "work_ua",           # WORK.UA офіційний канал
-    "vacancy_ukraine",   # Робота.UA — загальні
-    "jobs_in_ukraine",   # Робота в Україні — загальні
     "it_jobs_ukraine",   # IT Jobs Ukraine
     "ua_it_jobs",        # Віддалена робота / IT
-    "pracia_ua",         # Праця / робота — загальні
+    # Загальні
+    "work_ua",           # WORK.UA офіційний канал
+    "vacancy_ukraine",   # Робота.UA
+    "jobs_in_ukraine",   # Робота в Україні
+    "pracia_ua",         # Праця / робота
     "praca_ua",          # Робота в Україні
-    "ukr_jobs",          # UkrJobs — загальні
-    "jobs_ukraine_ua",   # Jobs UA — загальні
+    "ukr_jobs",          # UkrJobs
+    "jobs_ukraine_ua",   # Jobs UA
     "robota_in_ua",      # Робота в Україні
+    # Не-IT
+    "non_it_jobs",       # Non IT Jobs
+    "marketing_ukraine", # Marketing Kiev
 ]
 
 logger.info(f"DATABASE_URL present: {bool(DATABASE_URL)}")
@@ -1356,6 +1361,42 @@ async def fetch_djinni_search(keyword: str) -> list:
     return jobs
 
 
+async def fetch_workua_search(keyword: str) -> list:
+    jobs = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://www.work.ua/",
+    }
+    try:
+        async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
+            r = await client.get(f"https://www.work.ua/jobs/?search={quote_plus(keyword)}")
+            if r.status_code != 200:
+                return jobs
+            soup = BeautifulSoup(r.text, "lxml")
+            for card in soup.select("div.card.card-hover.job-link"):
+                title_tag = card.select_one("h2 a")
+                if not title_tag:
+                    continue
+                title = title_tag.get_text(strip=True)
+                if not _matches_keyword(title, keyword):
+                    continue
+                link    = "https://www.work.ua" + title_tag["href"]
+                company = card.select_one(".add-top-xs")
+                company = company.get_text(strip=True) if company else "Компанія"
+                sal_tag = card.select_one(".h5.strong-600")
+                salary  = sal_tag.get_text(strip=True) if sal_tag else ""
+                desc_tag = card.select_one("p.overflow.cut-bottom")
+                desc    = desc_tag.get_text(strip=True)[:200] if desc_tag else ""
+                job_id  = f"workua_s_{link.split('/')[-2]}"
+                jobs.append({"id": job_id, "title": title, "company": company,
+                             "salary": salary, "city": "Україна", "desc": desc,
+                             "url": link, "source": "Work.ua"})
+    except Exception as e:
+        logger.error(f"Work.ua search error: {e}")
+    return jobs
+
+
 async def fetch_jobs_ua_search(keyword: str) -> list:
     jobs = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
@@ -1396,20 +1437,17 @@ async def fetch_jobs_ua_search(keyword: str) -> list:
 async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str):
     await update.message.reply_text(f"🔍 Шукаю «{keyword}»...", reply_markup=MAIN_KB)
 
-    dou_results, djinni_results, jobsua_results, tg_results = await asyncio.gather(
+    dou_r, djinni_r, jobsua_r, workua_r, tg_r = await asyncio.gather(
         fetch_dou(keyword),
         fetch_djinni_search(keyword),
         fetch_jobs_ua_search(keyword),
+        fetch_workua_search(keyword),
         fetch_tg_channels(keyword),
         return_exceptions=True,
     )
-    dou_filtered = [j for j in (dou_results if isinstance(dou_results, list) else [])
-                    if _matches_keyword(j["title"], keyword)]
-    djinni_results  = djinni_results  if isinstance(djinni_results,  list) else []
-    jobsua_results  = jobsua_results  if isinstance(jobsua_results,  list) else []
-    tg_results      = tg_results      if isinstance(tg_results,      list) else []
-
-    all_jobs = dou_filtered + djinni_results + jobsua_results + tg_results
+    def _safe(r): return r if isinstance(r, list) else []
+    dou_filtered = [j for j in _safe(dou_r) if _matches_keyword(j["title"], keyword)]
+    all_jobs = dou_filtered + _safe(djinni_r) + _safe(jobsua_r) + _safe(workua_r) + _safe(tg_r)
 
     seen = set()
     unique = []
