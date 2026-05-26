@@ -369,35 +369,38 @@ async def parse_djinni(client: httpx.AsyncClient) -> list:
     return jobs
 
 
-async def parse_hh_ua(_client: httpx.AsyncClient) -> list:
-    return []
-
-    for item in data.get("items", []):
-        uid = "hh_" + str(item["id"])
-        title = item.get("name", "")
-        employer = item.get("employer") or {}
-        company = employer.get("name", "—")
-        area = item.get("area") or {}
-        location = area.get("name", "Україна")
-        if not is_allowed_location(location):
-            continue
-        sal = item.get("salary") or {}
-        salary = ""
-        if sal:
-            lo, hi, cur = sal.get("from"), sal.get("to"), sal.get("currency", "")
-            if lo and hi:
-                salary = f"{lo}–{hi} {cur}"
-            elif lo or hi:
-                salary = f"{lo or hi} {cur}"
-        exp_map = {"noExperience": "без досвіду", "between1And3": "1–3 р.", "between3And6": "3–6 р.", "moreThan6": "6+ р."}
-        exp_raw = (item.get("experience") or {}).get("id", "")
-        experience = exp_map.get(exp_raw, "")
-        url_job = item.get("alternate_url", "")
-        snippet = item.get("snippet") or {}
-        desc_parts = [snippet.get("requirement", ""), snippet.get("responsibility", "")]
-        description = " ".join(p for p in desc_parts if p)
-        description = re.sub(r"<[^>]+>", "", description)[:280]
-        jobs.append(Job(uid, title, company, salary, location, experience, url_job, "hh.ua", description))
+async def parse_jobs_ua(client: httpx.AsyncClient) -> list:
+    jobs = []
+    for page in range(1, 4):
+        url = f"https://jobs.ua/ukr/vacancy/page-{page}" if page > 1 else "https://jobs.ua/ukr/vacancy/"
+        soup = await fetch(client, url)
+        if not soup:
+            break
+        cards = soup.select("li.b-vacancy__item")
+        if not cards:
+            break
+        for card in cards:
+            a = card.select_one("a.b-vacancy__top__title")
+            if not a:
+                continue
+            href = a.get("href", "")
+            uid_part = href.rstrip("/").split("-")[-1]
+            uid = "jobs_" + uid_part
+            title = a.get_text(strip=True)
+            salary_el = card.select_one("span.b-vacancy__top__pay")
+            salary = re.sub(r"\s+", " ", salary_el.get_text(strip=True)).replace("грн.", "грн") if salary_el else ""
+            tech_items = card.select("span.b-vacancy__tech__item")
+            company = tech_items[0].get_text(strip=True) if tech_items else "—"
+            location = ""
+            for item in tech_items[1:]:
+                if item.select_one("i.fa-map-marker"):
+                    loc_a = item.select_one("a")
+                    location = loc_a.get_text(strip=True) if loc_a else item.get_text(strip=True)
+                    break
+            if location and not is_allowed_location(location):
+                continue
+            jobs.append(Job(uid, title, company, salary, location or "Україна", "", href, "Jobs.ua"))
+            await asyncio.sleep(0.3)
     return jobs
 
 
@@ -406,12 +409,12 @@ def _title_key(title: str) -> str:
 
 
 async def collect_all_jobs(client: httpx.AsyncClient) -> list:
-    source_names = ["work", "dou", "djinni", "hh"]
+    source_names = ["work", "dou", "djinni", "jobs"]
     results = await asyncio.gather(
         parse_work_ua(client),
         parse_dou(client),
         parse_djinni(client),
-        parse_hh_ua(client),
+        parse_jobs_ua(client),
         return_exceptions=True,
     )
     all_jobs = {}
