@@ -676,7 +676,7 @@ async def fetch_djinni_search(keyword: str) -> list:
                         found = True
                         title = item.get("title", "")
                         desc_raw = item.get("description", "")
-                        if kw_lower not in title.lower() and kw_lower not in desc_raw.lower():
+                        if kw_lower not in title.lower():
                             continue
                         url_job = item.get("url", "")
                         org = item.get("hiringOrganization") or {}
