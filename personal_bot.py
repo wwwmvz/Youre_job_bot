@@ -8,6 +8,12 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.error import RetryAfter
 import nest_asyncio
+try:
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+    TELETHON_OK = True
+except ImportError:
+    TELETHON_OK = False
 
 nest_asyncio.apply()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -16,6 +22,22 @@ logger = logging.getLogger(__name__)
 PERSONAL_BOT_TOKEN = os.environ.get("PERSONAL_BOT_TOKEN")
 MAIN_CHANNEL       = os.environ.get("MAIN_CHANNEL", "https://t.me/+YNCaw9gBllI5NzU0")
 DATABASE_URL       = os.environ.get("DATABASE_URL",        "")
+TG_API_ID          = os.environ.get("TG_API_ID",    "")
+TG_API_HASH        = os.environ.get("TG_API_HASH",  "")
+TG_SESSION         = os.environ.get("TG_SESSION",   "")
+
+# Public Telegram channels with job postings (username without @)
+TG_JOB_CHANNELS = [
+    "djinni_jobs",        # Djinni — IT вакансії
+    "dou_jobs_ua",        # DOU — IT вакансії
+    "work_ua_channel",    # Work.ua
+    "ukraine_jobs",       # Загальні вакансії
+    "jobs_in_ukraine",    # Загальні вакансії
+    "rabota_v_ukraine",   # Різні вакансії
+    "marketing_jobs_ua",  # Маркетинг
+    "it_jobs_ukraine",    # IT вакансії
+    "finance_jobs_ua",    # Фінанси / бухгалтерія
+]
 
 logger.info(f"DATABASE_URL present: {bool(DATABASE_URL)}")
 logger.info(f"TOKEN present: {bool(PERSONAL_BOT_TOKEN)}")
@@ -942,6 +964,89 @@ def _matches_keyword(title: str, keyword: str) -> bool:
             return False
     return True
 
+# ── Telethon channel reader ───────────────────────────────────────────────────
+_tg_client = None
+
+async def _get_tg_client():
+    global _tg_client
+    if not TELETHON_OK or not TG_API_ID or not TG_API_HASH or not TG_SESSION:
+        return None
+    if _tg_client and _tg_client.is_connected():
+        return _tg_client
+    try:
+        client = TelegramClient(StringSession(TG_SESSION), int(TG_API_ID), TG_API_HASH)
+        await client.connect()
+        if not await client.is_user_authorized():
+            logger.warning("Telethon: session is not authorized")
+            return None
+        _tg_client = client
+        logger.info("Telethon client connected")
+        return client
+    except Exception as e:
+        logger.error(f"Telethon connect error: {e}")
+        return None
+
+def _extract_job_from_tg_message(msg_text: str, channel: str, msg_id: int):
+    """Parse a raw Telegram channel message into a job-like dict."""
+    if not msg_text or len(msg_text) < 30:
+        return None
+    lines = [l.strip() for l in msg_text.strip().splitlines() if l.strip()]
+    if not lines:
+        return None
+    # First non-empty line is usually the title / position
+    title = lines[0].lstrip("#*•➡️🔹🔸▪️◾️✅🚀💼📌").strip()
+    if len(title) < 5 or len(title) > 120:
+        return None
+    # Try to find salary line
+    salary = ""
+    for line in lines[1:]:
+        if re.search(r"\d[\d\s]*(?:грн|usd|\$|€|тис|k\b)", line, re.I):
+            salary = line[:80]
+            break
+    # Company: look for line with keywords
+    company = "Компанія"
+    for line in lines[1:6]:
+        if any(kw in line.lower() for kw in ["компанія", "company", "роботодавець", "employer", "від ", "від:"]):
+            company = re.sub(r"(?i)компанія:?\s*|company:?\s*", "", line).strip()[:60]
+            break
+    # URL: first https link in text
+    url_match = re.search(r"https?://\S+", msg_text)
+    url = url_match.group(0).rstrip(".,)") if url_match else f"https://t.me/{channel}/{msg_id}"
+    # Description: join remaining lines, skip title and salary
+    desc_lines = [l for l in lines[1:] if l != salary and len(l) > 10]
+    desc = " ".join(desc_lines)[:200]
+    return {
+        "id":      f"tg_{channel}_{msg_id}",
+        "title":   title,
+        "company": company,
+        "salary":  salary,
+        "city":    "Україна",
+        "desc":    desc,
+        "url":     url,
+        "source":  f"TG @{channel}",
+    }
+
+async def fetch_tg_channels(keyword: str) -> list:
+    jobs = []
+    client = await _get_tg_client()
+    if not client:
+        return jobs
+    for channel in TG_JOB_CHANNELS:
+        try:
+            messages = await client.get_messages(channel, limit=40)
+            for msg in messages:
+                text = msg.text or msg.message or ""
+                job = _extract_job_from_tg_message(text, channel, msg.id)
+                if not job:
+                    continue
+                if keyword and not _matches_keyword(job["title"] + " " + job["desc"], keyword):
+                    continue
+                jobs.append(job)
+        except Exception as e:
+            logger.warning(f"Telethon fetch error for @{channel}: {e}")
+    logger.info(f"Telethon: знайдено {len(jobs)} вакансій з TG каналів по '{keyword}'")
+    return jobs
+
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 PHOTO_URLS = {
@@ -1313,12 +1418,20 @@ async def fetch_jobs_ua_search(keyword: str) -> list:
 async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str):
     await update.message.reply_text(f"🔍 Шукаю «{keyword}»...", reply_markup=MAIN_KB)
 
-    dou_results = await fetch_dou(keyword)
-    dou_filtered = [j for j in dou_results if _matches_keyword(j["title"], keyword)]
-    djinni_results = await fetch_djinni_search(keyword)
-    jobsua_results = await fetch_jobs_ua_search(keyword)
+    dou_results, djinni_results, jobsua_results, tg_results = await asyncio.gather(
+        fetch_dou(keyword),
+        fetch_djinni_search(keyword),
+        fetch_jobs_ua_search(keyword),
+        fetch_tg_channels(keyword),
+        return_exceptions=True,
+    )
+    dou_filtered = [j for j in (dou_results if isinstance(dou_results, list) else [])
+                    if _matches_keyword(j["title"], keyword)]
+    djinni_results  = djinni_results  if isinstance(djinni_results,  list) else []
+    jobsua_results  = jobsua_results  if isinstance(jobsua_results,  list) else []
+    tg_results      = tg_results      if isinstance(tg_results,      list) else []
 
-    all_jobs = dou_filtered + djinni_results + jobsua_results
+    all_jobs = dou_filtered + djinni_results + jobsua_results + tg_results
 
     seen = set()
     unique = []

@@ -5,3 +5,4 @@ lxml
 nest_asyncio
 psycopg2-binary
 python-dotenv
+telethon
