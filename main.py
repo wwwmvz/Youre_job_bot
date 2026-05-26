@@ -5,15 +5,17 @@ import os
 import re
 from datetime import datetime, timezone
 from dataclasses import dataclass
+from urllib.parse import quote_plus
 from dotenv import load_dotenv
 
 load_dotenv()
 
 import httpx
 from bs4 import BeautifulSoup
-from telegram import Bot
+from telegram import Update
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -242,10 +244,14 @@ async def fetch_work_ua_detail(client, url, uid, title) -> Job:
     return Job(uid, title, company, salary, location or "Україна", experience, url, "Work.ua", description)
 
 
-async def parse_work_ua(client: httpx.AsyncClient) -> list:
+async def parse_work_ua(client: httpx.AsyncClient, keyword: str = None) -> list:
     jobs = []
     for page in range(1, 4):
-        soup = await fetch(client, f"https://www.work.ua/jobs/?page={page}")
+        if keyword:
+            url = f"https://www.work.ua/jobs/?q={quote_plus(keyword)}&page={page}"
+        else:
+            url = f"https://www.work.ua/jobs/?page={page}"
+        soup = await fetch(client, url)
         if not soup:
             break
         for card in soup.select("div.job-link"):
@@ -260,11 +266,11 @@ async def parse_work_ua(client: httpx.AsyncClient) -> list:
             if loc_el:
                 sib = loc_el.find_next_sibling(string=True)
                 location_preview = sib.strip() if sib else ""
-            if location_preview and not is_allowed_location(location_preview):
+            if not keyword and location_preview and not is_allowed_location(location_preview):
                 continue
             job_url = "https://www.work.ua" + href
             job = await fetch_work_ua_detail(client, job_url, uid, title)
-            if not is_allowed_location(job.location):
+            if not keyword and not is_allowed_location(job.location):
                 continue
             jobs.append(job)
             await asyncio.sleep(0.7)
@@ -291,9 +297,13 @@ async def fetch_dou_detail(client, url, uid, title, company, salary, location) -
     return Job(uid, title, company, salary, location, experience, url, "DOU.ua", description)
 
 
-async def parse_dou(client: httpx.AsyncClient) -> list:
+async def parse_dou(client: httpx.AsyncClient, keyword: str = None) -> list:
     jobs = []
-    soup = await fetch(client, "https://jobs.dou.ua/vacancies/")
+    if keyword:
+        url = f"https://jobs.dou.ua/vacancies/?search={quote_plus(keyword)}"
+    else:
+        url = "https://jobs.dou.ua/vacancies/"
+    soup = await fetch(client, url)
     if not soup:
         return jobs
     for li in soup.select("li.l-vacancy")[:60]:
@@ -309,7 +319,7 @@ async def parse_dou(client: httpx.AsyncClient) -> list:
         salary = salary_el.get_text(strip=True) if salary_el else ""
         loc_el = li.select_one("span.cities")
         location = loc_el.get_text(strip=True) if loc_el else "Україна"
-        if not is_allowed_location(location):
+        if not keyword and not is_allowed_location(location):
             continue
         job = await fetch_dou_detail(client, href, uid, title, company, salary, location)
         jobs.append(job)
@@ -317,11 +327,15 @@ async def parse_dou(client: httpx.AsyncClient) -> list:
     return jobs
 
 
-async def parse_djinni(client: httpx.AsyncClient) -> list:
+async def parse_djinni(client: httpx.AsyncClient, keyword: str = None) -> list:
     import json as _json
     jobs = []
     for page in range(1, 4):
-        url = f"https://djinni.co/jobs/?page={page}" if page > 1 else "https://djinni.co/jobs/"
+        if keyword:
+            base = f"https://djinni.co/jobs/?q={quote_plus(keyword)}"
+            url = base if page == 1 else f"{base}&page={page}"
+        else:
+            url = f"https://djinni.co/jobs/?page={page}" if page > 1 else "https://djinni.co/jobs/"
         soup = await fetch(client, url)
         if not soup:
             break
@@ -369,10 +383,14 @@ async def parse_djinni(client: httpx.AsyncClient) -> list:
     return jobs
 
 
-async def parse_jobs_ua(client: httpx.AsyncClient) -> list:
+async def parse_jobs_ua(client: httpx.AsyncClient, keyword: str = None) -> list:
     jobs = []
-    for page in range(1, 4):
-        url = f"https://jobs.ua/ukr/vacancy/page-{page}" if page > 1 else "https://jobs.ua/ukr/vacancy/"
+    if keyword:
+        pages = [(1, f"https://jobs.ua/ukr/vacancy/?search_phrase={quote_plus(keyword)}")]
+    else:
+        pages = [(p, f"https://jobs.ua/ukr/vacancy/page-{p}" if p > 1 else "https://jobs.ua/ukr/vacancy/")
+                 for p in range(1, 4)]
+    for _, url in pages:
         soup = await fetch(client, url)
         if not soup:
             break
@@ -397,7 +415,7 @@ async def parse_jobs_ua(client: httpx.AsyncClient) -> list:
                     loc_a = item.select_one("a")
                     location = loc_a.get_text(strip=True) if loc_a else item.get_text(strip=True)
                     break
-            if location and not is_allowed_location(location):
+            if not keyword and location and not is_allowed_location(location):
                 continue
             jobs.append(Job(uid, title, company, salary, location or "Україна", "", href, "Jobs.ua"))
             await asyncio.sleep(0.3)
@@ -426,7 +444,6 @@ async def collect_all_jobs(client: httpx.AsyncClient) -> list:
             log.error(f"Помилка {name}: {r}")
             all_jobs[name] = []
 
-    # Чергуємо по 5 з кожного джерела
     interleaved = []
     batch = 5
     sources = [all_jobs[n] for n in source_names]
@@ -437,7 +454,6 @@ async def collect_all_jobs(client: httpx.AsyncClient) -> list:
             interleaved.extend(chunk)
             indices[i] += batch
 
-    # Дедублікація по нормалізованому заголовку всередині батчу
     seen_keys: set[str] = set()
     unique = []
     for job in interleaved:
@@ -446,6 +462,27 @@ async def collect_all_jobs(client: httpx.AsyncClient) -> list:
             seen_keys.add(key)
             unique.append(job)
     return unique
+
+
+async def search_jobs(client: httpx.AsyncClient, keyword: str) -> list:
+    results = await asyncio.gather(
+        parse_dou(client, keyword=keyword),
+        parse_djinni(client, keyword=keyword),
+        parse_jobs_ua(client, keyword=keyword),
+        return_exceptions=True,
+    )
+    all_jobs = []
+    for r in results:
+        if isinstance(r, list):
+            all_jobs.extend(r)
+    seen_keys: set[str] = set()
+    unique = []
+    for job in all_jobs:
+        key = _title_key(job.title)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique.append(job)
+    return unique[:15]
 
 
 # ─── ФОРМАТУВАННЯ ────────────────────────────────────────────────────────────
@@ -481,43 +518,136 @@ def format_job(job: Job) -> str:
     return "\n".join(lines)
 
 
-# ─── ГОЛОВНИЙ ЦИКЛ ───────────────────────────────────────────────────────────
-async def run():
-    bot = Bot(token=TELEGRAM_TOKEN)
-    con = init_db()
-    me = await bot.get_me()
+def format_job_search(job: Job, index: int) -> str:
+    """Компактний формат для результатів пошуку."""
+    _, _, is_remote = normalize_location(job.location)
+    loc = "🌐 Віддалено" if is_remote else f"📍 {job.location.split(',')[0].strip()}"
+    salary = f"💰 {job.salary}" if job.salary else ""
+    parts = [f"<b>{index}. {job.title}</b>"]
+    if job.company and job.company != "—":
+        parts.append(f"🏢 {job.company}")
+    parts.append(loc)
+    if salary:
+        parts.append(salary)
+    parts.append(f"🔗 <a href='{job.url}'>{job.source}</a>")
+    return "\n".join(parts)
+
+
+# ─── TELEGRAM HANDLERS ───────────────────────────────────────────────────────
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "👋 Привіт! Я бот пошуку вакансій по Україні.\n\n"
+        "🔍 <b>Як шукати:</b>\n"
+        "Просто напишіть ключове слово або фразу, наприклад:\n"
+        "  • <code>python developer</code>\n"
+        "  • <code>бухгалтер</code>\n"
+        "  • <code>водій Київ</code>\n\n"
+        "📢 Або підпишіться на канал — нові вакансії публікуються автоматично кожні 30 хв.\n\n"
+        "Джерела: DOU.ua • Djinni.co • Jobs.ua"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyword = " ".join(context.args).strip() if context.args else ""
+    if not keyword:
+        await update.message.reply_text("Вкажіть ключове слово: /search python")
+        return
+    await _do_search(update, context, keyword)
+
+
+async def msg_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyword = (update.message.text or "").strip()
+    if not keyword:
+        return
+    await _do_search(update, context, keyword)
+
+
+async def _do_search(update: Update, context: ContextTypes.DEFAULT_TYPE, keyword: str):
+    client: httpx.AsyncClient = context.bot_data["client"]
+    msg = await update.message.reply_text(f"🔍 Шукаю «{keyword}»...")
+    jobs = await search_jobs(client, keyword)
+    if not jobs:
+        await msg.edit_text(f"😔 Нічого не знайдено по запиту «{keyword}».\nСпробуйте інше ключове слово.")
+        return
+    await msg.edit_text(f"✅ Знайдено {len(jobs)} вакансій по запиту «{keyword}»:")
+    for i, job in enumerate(jobs, 1):
+        try:
+            await update.message.reply_text(
+                format_job_search(job, i),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            await asyncio.sleep(0.5)
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)
+            await update.message.reply_text(
+                format_job_search(job, i),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            log.error(f"Помилка відправки пошукового результату: {e}")
+
+
+# ─── ФОНОВИЙ ПОСТИНГ ─────────────────────────────────────────────────────────
+async def post_auto_jobs(context: ContextTypes.DEFAULT_TYPE):
+    client: httpx.AsyncClient = context.bot_data["client"]
+    con = context.bot_data["con"]
+    log.info("Починаємо збір вакансій…")
+    jobs = await collect_all_jobs(client)
+    new_count = 0
+    for job in jobs:
+        if is_sent(con, job.uid):
+            continue
+        for attempt in range(2):
+            try:
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=format_job(job),
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+                mark_sent(con, job.uid)
+                new_count += 1
+                await asyncio.sleep(3)
+                break
+            except RetryAfter as e:
+                wait = e.retry_after + 2
+                log.warning(f"Flood control, чекаємо {wait}s")
+                await asyncio.sleep(wait)
+            except Exception as e:
+                log.error(f"Помилка відправки {job.uid}: {e}")
+                break
+    log.info(f"Відправлено: {new_count}. Наступна перевірка через {CHECK_INTERVAL // 60} хв.")
+
+
+# ─── ІНІЦІАЛІЗАЦІЯ ───────────────────────────────────────────────────────────
+async def post_init(application: Application):
+    application.bot_data["con"] = init_db()
+    application.bot_data["client"] = httpx.AsyncClient()
+    me = await application.bot.get_me()
     log.info(f"Бот запущено: @{me.username}")
 
-    async with httpx.AsyncClient() as client:
-        while True:
-            log.info("Починаємо збір вакансій…")
-            jobs = await collect_all_jobs(client)
-            new_count = 0
-            for job in jobs:
-                if is_sent(con, job.uid):
-                    continue
-                for attempt in range(2):
-                    try:
-                        await bot.send_message(
-                            chat_id=CHANNEL_ID,
-                            text=format_job(job),
-                            parse_mode=ParseMode.HTML,
-                            disable_web_page_preview=True,
-                        )
-                        mark_sent(con, job.uid)
-                        new_count += 1
-                        await asyncio.sleep(3)
-                        break
-                    except RetryAfter as e:
-                        wait = e.retry_after + 2
-                        log.warning(f"Flood control, чекаємо {wait}s")
-                        await asyncio.sleep(wait)
-                    except Exception as e:
-                        log.error(f"Помилка відправки {job.uid}: {e}")
-                        break
-            log.info(f"Відправлено: {new_count}. Наступна перевірка через {CHECK_INTERVAL//60} хв.")
-            await asyncio.sleep(CHECK_INTERVAL)
+
+async def post_shutdown(application: Application):
+    await application.bot_data["client"].aclose()
+
+
+def main():
+    app = (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("search", cmd_search))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_search))
+    app.job_queue.run_repeating(post_auto_jobs, interval=CHECK_INTERVAL, first=30)
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    main()
