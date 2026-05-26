@@ -3,7 +3,7 @@ import sqlite3
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
@@ -172,7 +172,7 @@ def is_sent(con, uid: str) -> bool:
 
 def mark_sent(con, uid: str):
     con.execute("INSERT OR IGNORE INTO sent_jobs VALUES (?, ?)",
-                (uid, datetime.utcnow().isoformat()))
+                (uid, datetime.now(timezone.utc).isoformat()))
     con.commit()
 
 
