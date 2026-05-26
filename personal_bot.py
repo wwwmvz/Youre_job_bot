@@ -8,12 +8,6 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.error import RetryAfter
 import nest_asyncio
-try:
-    from telethon import TelegramClient
-    from telethon.sessions import StringSession
-    TELETHON_OK = True
-except ImportError:
-    TELETHON_OK = False
 
 nest_asyncio.apply()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -22,21 +16,20 @@ logger = logging.getLogger(__name__)
 PERSONAL_BOT_TOKEN = os.environ.get("PERSONAL_BOT_TOKEN")
 MAIN_CHANNEL       = os.environ.get("MAIN_CHANNEL", "https://t.me/+YNCaw9gBllI5NzU0")
 DATABASE_URL       = os.environ.get("DATABASE_URL",        "")
-TG_API_ID          = os.environ.get("TG_API_ID",    "")
-TG_API_HASH        = os.environ.get("TG_API_HASH",  "")
-TG_SESSION         = os.environ.get("TG_SESSION",   "")
-
-# Public Telegram channels with job postings (username without @)
+# Public Telegram job channels (username without @) — verified working
 TG_JOB_CHANNELS = [
-    "djinni_jobs",        # Djinni — IT вакансії
-    "dou_jobs_ua",        # DOU — IT вакансії
-    "work_ua_channel",    # Work.ua
-    "ukraine_jobs",       # Загальні вакансії
-    "jobs_in_ukraine",    # Загальні вакансії
-    "rabota_v_ukraine",   # Різні вакансії
-    "marketing_jobs_ua",  # Маркетинг
-    "it_jobs_ukraine",    # IT вакансії
-    "finance_jobs_ua",    # Фінанси / бухгалтерія
+    "djinni_jobs",       # Djinni — IT вакансії
+    "dou_jobs",          # DOU Jobs — DevOps / SysAdmin / IT
+    "work_ua",           # WORK.UA офіційний канал
+    "vacancy_ukraine",   # Робота.UA — загальні
+    "jobs_in_ukraine",   # Робота в Україні — загальні
+    "it_jobs_ukraine",   # IT Jobs Ukraine
+    "ua_it_jobs",        # Віддалена робота / IT
+    "pracia_ua",         # Праця / робота — загальні
+    "praca_ua",          # Робота в Україні
+    "ukr_jobs",          # UkrJobs — загальні
+    "jobs_ukraine_ua",   # Jobs UA — загальні
+    "robota_in_ua",      # Робота в Україні
 ]
 
 logger.info(f"DATABASE_URL present: {bool(DATABASE_URL)}")
@@ -964,57 +957,31 @@ def _matches_keyword(title: str, keyword: str) -> bool:
             return False
     return True
 
-# ── Telethon channel reader ───────────────────────────────────────────────────
-_tg_client = None
-
-async def _get_tg_client():
-    global _tg_client
-    if not TELETHON_OK or not TG_API_ID or not TG_API_HASH or not TG_SESSION:
+# ── Telegram public channel scraper (t.me/s/) ────────────────────────────────
+def _parse_tg_message(text: str, channel: str, msg_url: str):
+    if not text or len(text) < 30:
         return None
-    if _tg_client and _tg_client.is_connected():
-        return _tg_client
-    try:
-        client = TelegramClient(StringSession(TG_SESSION), int(TG_API_ID), TG_API_HASH)
-        await client.connect()
-        if not await client.is_user_authorized():
-            logger.warning("Telethon: session is not authorized")
-            return None
-        _tg_client = client
-        logger.info("Telethon client connected")
-        return client
-    except Exception as e:
-        logger.error(f"Telethon connect error: {e}")
-        return None
-
-def _extract_job_from_tg_message(msg_text: str, channel: str, msg_id: int):
-    """Parse a raw Telegram channel message into a job-like dict."""
-    if not msg_text or len(msg_text) < 30:
-        return None
-    lines = [l.strip() for l in msg_text.strip().splitlines() if l.strip()]
+    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
     if not lines:
         return None
-    # First non-empty line is usually the title / position
-    title = lines[0].lstrip("#*•➡️🔹🔸▪️◾️✅🚀💼📌").strip()
-    if len(title) < 5 or len(title) > 120:
+    title = lines[0].lstrip("#*•➡️🔹🔸▪️◾️✅🚀💼📌🔔⚡").strip()
+    if len(title) < 5 or len(title) > 150:
         return None
-    # Try to find salary line
     salary = ""
     for line in lines[1:]:
-        if re.search(r"\d[\d\s]*(?:грн|usd|\$|€|тис|k\b)", line, re.I):
+        if re.search(r"\d[\d\s]*(?:грн|usd|\$|€|тис\.?|k\b)", line, re.I):
             salary = line[:80]
             break
-    # Company: look for line with keywords
     company = "Компанія"
     for line in lines[1:6]:
-        if any(kw in line.lower() for kw in ["компанія", "company", "роботодавець", "employer", "від ", "від:"]):
-            company = re.sub(r"(?i)компанія:?\s*|company:?\s*", "", line).strip()[:60]
+        if any(kw in line.lower() for kw in ["компанія", "company", "від ", "від:"]):
+            company = re.sub(r"(?i)компанія:?\s*|company:?\s*|від:?\s*", "", line).strip()[:60] or "Компанія"
             break
-    # URL: first https link in text
-    url_match = re.search(r"https?://\S+", msg_text)
-    url = url_match.group(0).rstrip(".,)") if url_match else f"https://t.me/{channel}/{msg_id}"
-    # Description: join remaining lines, skip title and salary
+    url_match = re.search(r"https?://\S+", text)
+    url = url_match.group(0).rstrip(".,)>") if url_match else msg_url
     desc_lines = [l for l in lines[1:] if l != salary and len(l) > 10]
     desc = " ".join(desc_lines)[:200]
+    msg_id = msg_url.rstrip("/").split("/")[-1]
     return {
         "id":      f"tg_{channel}_{msg_id}",
         "title":   title,
@@ -1022,29 +989,40 @@ def _extract_job_from_tg_message(msg_text: str, channel: str, msg_id: int):
         "salary":  salary,
         "city":    "Україна",
         "desc":    desc,
-        "url":     url,
+        "url":     msg_url,
         "source":  f"TG @{channel}",
     }
 
 async def fetch_tg_channels(keyword: str) -> list:
     jobs = []
-    client = await _get_tg_client()
-    if not client:
-        return jobs
-    for channel in TG_JOB_CHANNELS:
-        try:
-            messages = await client.get_messages(channel, limit=40)
-            for msg in messages:
-                text = msg.text or msg.message or ""
-                job = _extract_job_from_tg_message(text, channel, msg.id)
-                if not job:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+        "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.7",
+    }
+    async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
+        for channel in TG_JOB_CHANNELS:
+            try:
+                r = await client.get(f"https://t.me/s/{channel}")
+                if r.status_code != 200:
+                    logger.warning(f"TG @{channel}: HTTP {r.status_code}")
                     continue
-                if keyword and not _matches_keyword(job["title"] + " " + job["desc"], keyword):
-                    continue
-                jobs.append(job)
-        except Exception as e:
-            logger.warning(f"Telethon fetch error for @{channel}: {e}")
-    logger.info(f"Telethon: знайдено {len(jobs)} вакансій з TG каналів по '{keyword}'")
+                soup = BeautifulSoup(r.text, "html.parser")
+                for widget in soup.select("div.tgme_widget_message_wrap"):
+                    msg_el = widget.select_one("div.tgme_widget_message_text")
+                    if not msg_el:
+                        continue
+                    text = msg_el.get_text(separator="\n", strip=True)
+                    link_el = widget.select_one("a.tgme_widget_message_date")
+                    msg_url = link_el["href"] if link_el else f"https://t.me/{channel}"
+                    job = _parse_tg_message(text, channel, msg_url)
+                    if not job:
+                        continue
+                    if keyword and not _matches_keyword(job["title"] + " " + job["desc"], keyword):
+                        continue
+                    jobs.append(job)
+            except Exception as e:
+                logger.warning(f"TG scrape error @{channel}: {e}")
+    logger.info(f"TG channels: знайдено {len(jobs)} по '{keyword}'")
     return jobs
 
 
