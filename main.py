@@ -316,30 +316,145 @@ async def parse_dou(client: httpx.AsyncClient) -> list:
     return jobs
 
 
+async def parse_djinni(client: httpx.AsyncClient) -> list:
+    import json as _json
+    jobs = []
+    for page in range(1, 4):
+        url = f"https://djinni.co/jobs/?page={page}" if page > 1 else "https://djinni.co/jobs/"
+        soup = await fetch(client, url)
+        if not soup:
+            break
+        scripts = soup.find_all("script", type="application/ld+json")
+        found = False
+        for s in scripts:
+            try:
+                data = _json.loads(s.string or "")
+            except Exception:
+                continue
+            if not isinstance(data, list):
+                continue
+            for item in data:
+                if item.get("@type") != "JobPosting":
+                    continue
+                found = True
+                url_job = item.get("url", "")
+                uid = "djinni_" + url_job.rstrip("/").split("/")[-1]
+                title = item.get("title", "")
+                org = item.get("hiringOrganization") or {}
+                company = org.get("name", "—") if isinstance(org, dict) else "—"
+                is_remote = item.get("jobLocationType") == "TELECOMMUTE"
+                location = "Дистанційно" if is_remote else "Україна"
+                exp_req = item.get("experienceRequirements") or {}
+                months = exp_req.get("monthsOfExperience") if isinstance(exp_req, dict) else None
+                experience = f"{int(months // 12)} р." if months and months >= 12 else ("без досвіду" if months == 0 else "")
+                salary_data = item.get("baseSalary") or {}
+                salary = ""
+                if isinstance(salary_data, dict):
+                    val = salary_data.get("value") or {}
+                    if isinstance(val, dict):
+                        mn = val.get("minValue")
+                        mx = val.get("maxValue")
+                        currency = salary_data.get("currency", "USD")
+                        if mn and mx:
+                            salary = f"{mn}–{mx} {currency}"
+                        elif mn or mx:
+                            salary = f"{mn or mx} {currency}"
+                desc_raw = item.get("description", "")
+                description = desc_raw[:280] + "…" if len(desc_raw) > 280 else desc_raw
+                jobs.append(Job(uid, title, company, salary, location, experience, url_job, "Djinni", description))
+                await asyncio.sleep(0.3)
+        if not found:
+            break
+    return jobs
+
+
+async def parse_hh_ua(client: httpx.AsyncClient) -> list:
+    jobs = []
+    headers = {**HEADERS, "HH-User-Agent": "jobbot/1.0 (bot@example.com)"}
+    try:
+        r = await client.get(
+            "https://api.hh.ru/vacancies",
+            params={"area": 115, "per_page": 100, "order_by": "publication_time"},
+            headers=headers,
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        log.warning(f"hh.ua API error: {e}")
+        return jobs
+
+    for item in data.get("items", []):
+        uid = "hh_" + str(item["id"])
+        title = item.get("name", "")
+        employer = item.get("employer") or {}
+        company = employer.get("name", "—")
+        area = item.get("area") or {}
+        location = area.get("name", "Україна")
+        if not is_allowed_location(location):
+            continue
+        sal = item.get("salary") or {}
+        salary = ""
+        if sal:
+            lo, hi, cur = sal.get("from"), sal.get("to"), sal.get("currency", "")
+            if lo and hi:
+                salary = f"{lo}–{hi} {cur}"
+            elif lo or hi:
+                salary = f"{lo or hi} {cur}"
+        exp_map = {"noExperience": "без досвіду", "between1And3": "1–3 р.", "between3And6": "3–6 р.", "moreThan6": "6+ р."}
+        exp_raw = (item.get("experience") or {}).get("id", "")
+        experience = exp_map.get(exp_raw, "")
+        url_job = item.get("alternate_url", "")
+        snippet = item.get("snippet") or {}
+        desc_parts = [snippet.get("requirement", ""), snippet.get("responsibility", "")]
+        description = " ".join(p for p in desc_parts if p)
+        description = re.sub(r"<[^>]+>", "", description)[:280]
+        jobs.append(Job(uid, title, company, salary, location, experience, url_job, "hh.ua", description))
+    return jobs
+
+
+def _title_key(title: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", title.lower())).strip()
+
+
 async def collect_all_jobs(client: httpx.AsyncClient) -> list:
+    source_names = ["work", "dou", "djinni", "hh"]
     results = await asyncio.gather(
         parse_work_ua(client),
         parse_dou(client),
-        return_exceptions=True
+        parse_djinni(client),
+        parse_hh_ua(client),
+        return_exceptions=True,
     )
-    all_jobs = {"work": [], "dou": [], "robota": [], "djinni": []}
-    for name, r in zip(["work", "dou", "robota", "djinni"], results):
+    all_jobs = {}
+    for name, r in zip(source_names, results):
         if isinstance(r, list):
             all_jobs[name] = r
+            log.info(f"{name}: знайдено {len(r)} вакансій")
         else:
             log.error(f"Помилка {name}: {r}")
+            all_jobs[name] = []
 
     # Чергуємо по 5 з кожного джерела
     interleaved = []
     batch = 5
-    sources = [all_jobs["work"], all_jobs["dou"], all_jobs["robota"], all_jobs["djinni"]]
-    indices = [0, 0, 0, 0]
-    while any(indices[i] < len(sources[i]) for i in range(4)):
-        for i in range(4):
+    sources = [all_jobs[n] for n in source_names]
+    indices = [0] * len(sources)
+    while any(indices[i] < len(sources[i]) for i in range(len(sources))):
+        for i in range(len(sources)):
             chunk = sources[i][indices[i]:indices[i] + batch]
             interleaved.extend(chunk)
             indices[i] += batch
-    return interleaved
+
+    # Дедублікація по нормалізованому заголовку всередині батчу
+    seen_keys: set[str] = set()
+    unique = []
+    for job in interleaved:
+        key = _title_key(job.title)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique.append(job)
+    return unique
 
 
 # ─── ФОРМАТУВАННЯ ────────────────────────────────────────────────────────────
