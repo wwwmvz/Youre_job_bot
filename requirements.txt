@@ -4,3 +4,4 @@ python-telegram-bot[job-queue]
 lxml
 nest_asyncio
 psycopg2-binary
+python-dotenv

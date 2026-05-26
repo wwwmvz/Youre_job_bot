@@ -1,0 +1,22 @@
+# Секретні дані — ніколи не комітити!
+.env
+
+# Бази даних (локальні)
+*.db
+
+# Логи
+*.log
+
+# Дебаг файли
+*_debug.html
+
+# macOS
+.DS_Store
+.localized
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/

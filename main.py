@@ -5,6 +5,9 @@ import os
 import re
 from datetime import datetime
 from dataclasses import dataclass
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import httpx
 from bs4 import BeautifulSoup
@@ -22,7 +25,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ─── НАЛАШТУВАННЯ ────────────────────────────────────────────────────────────
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8483631592:AAF-Prd9dhPRyiGYs7ZmS-ct0EyOUw9vOUQ")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID     = os.getenv("CHANNEL_ID", "-1003931372029")
 CHECK_INTERVAL = 60 * 30
 DB_FILE        = "jobs.db"

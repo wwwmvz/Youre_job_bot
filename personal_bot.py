@@ -1,4 +1,6 @@
 import os, logging, asyncio, httpx, re
+from dotenv import load_dotenv
+load_dotenv()
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
@@ -9,8 +11,8 @@ nest_asyncio.apply()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-PERSONAL_BOT_TOKEN = os.environ.get("PERSONAL_BOT_TOKEN", "8018911506:AAFPS_Jdw8MCYJ34M3UGnKvGoEV8PN7yRSQ")
-MAIN_CHANNEL       = os.environ.get("MAIN_CHANNEL",        "https://t.me/+YNCaw9gBllI5NzU0")
+PERSONAL_BOT_TOKEN = os.environ.get("PERSONAL_BOT_TOKEN")
+MAIN_CHANNEL       = os.environ.get("MAIN_CHANNEL", "https://t.me/+YNCaw9gBllI5NzU0")
 DATABASE_URL       = os.environ.get("DATABASE_URL",        "")
 
 logger.info(f"DATABASE_URL present: {bool(DATABASE_URL)}")
