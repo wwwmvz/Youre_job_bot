@@ -13,6 +13,7 @@ import httpx
 from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
+from telegram.error import RetryAfter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -368,21 +369,8 @@ async def parse_djinni(client: httpx.AsyncClient) -> list:
     return jobs
 
 
-async def parse_hh_ua(client: httpx.AsyncClient) -> list:
-    jobs = []
-    headers = {**HEADERS, "HH-User-Agent": "jobbot/1.0 (bot@example.com)"}
-    try:
-        r = await client.get(
-            "https://api.hh.ru/vacancies",
-            params={"area": 115, "per_page": 100, "order_by": "publication_time"},
-            headers=headers,
-            timeout=20,
-        )
-        r.raise_for_status()
-        data = r.json()
-    except Exception as e:
-        log.warning(f"hh.ua API error: {e}")
-        return jobs
+async def parse_hh_ua(_client: httpx.AsyncClient) -> list:
+    return []
 
     for item in data.get("items", []):
         uid = "hh_" + str(item["id"])
@@ -505,18 +493,25 @@ async def run():
             for job in jobs:
                 if is_sent(con, job.uid):
                     continue
-                try:
-                    await bot.send_message(
-                        chat_id=CHANNEL_ID,
-                        text=format_job(job),
-                        parse_mode=ParseMode.HTML,
-                        disable_web_page_preview=True,
-                    )
-                    mark_sent(con, job.uid)
-                    new_count += 1
-                    await asyncio.sleep(2)
-                except Exception as e:
-                    log.error(f"Помилка відправки {job.uid}: {e}")
+                for attempt in range(2):
+                    try:
+                        await bot.send_message(
+                            chat_id=CHANNEL_ID,
+                            text=format_job(job),
+                            parse_mode=ParseMode.HTML,
+                            disable_web_page_preview=True,
+                        )
+                        mark_sent(con, job.uid)
+                        new_count += 1
+                        await asyncio.sleep(3)
+                        break
+                    except RetryAfter as e:
+                        wait = e.retry_after + 2
+                        log.warning(f"Flood control, чекаємо {wait}s")
+                        await asyncio.sleep(wait)
+                    except Exception as e:
+                        log.error(f"Помилка відправки {job.uid}: {e}")
+                        break
             log.info(f"Відправлено: {new_count}. Наступна перевірка через {CHECK_INTERVAL//60} хв.")
             await asyncio.sleep(CHECK_INTERVAL)
 
