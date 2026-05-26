@@ -258,8 +258,30 @@ SCHEDULES   = ["Кожну нову вакансію","Кожну годину",
 
 MAIN_KB = ReplyKeyboardMarkup(
     [[KeyboardButton("🔍 Знайти вакансії"), KeyboardButton("⚙️ Налаштування")],
-     [KeyboardButton("⛔ Зупинити"),         KeyboardButton("📊 Мій профіль")]],
+     [KeyboardButton("📊 Мій профіль"),     KeyboardButton("❓ Допомога")],
+     [KeyboardButton("⛔ Зупинити")]],
     resize_keyboard=True
+)
+
+HELP_TEXT = (
+    "❓ <b>Що вміє цей бот?</b>\n\n"
+    "🔍 <b>Пошук за ключовим словом</b>\n"
+    "Просто напишіть назву посади — бот знайде вакансії на DOU, Djinni та Jobs.ua.\n"
+    "Підтримує Ukrainian↔English: <i>«сеньйор розробник»</i> знайде <i>«Senior Developer»</i>, "
+    "<i>«бухгалтер»</i> знайде <i>«Accountant»</i> і навпаки.\n\n"
+    "🔔 <b>Автоматичні сповіщення</b>\n"
+    "Налаштуйте профіль (місто, сфера, зарплата) — бот сам надсилатиме нові вакансії "
+    "з потрібною частотою: щогодини, раз на день тощо.\n\n"
+    "📋 <b>Кнопки меню</b>\n"
+    "• 🔍 <b>Знайти вакансії</b> — показати свіжі вакансії за вашим профілем\n"
+    "• ⚙️ <b>Налаштування</b> — змінити місто, сферу, зарплату або розклад\n"
+    "• 📊 <b>Мій профіль</b> — переглянути збережені налаштування\n"
+    "• ⛔ <b>Зупинити</b> — вимкнути автоматичні сповіщення\n\n"
+    "💡 <b>Поради для пошуку:</b>\n"
+    "• Можна писати українською або англійською\n"
+    "• Можна комбінувати: <i>«джун python»</i>, <i>«senior бухгалтер»</i>\n"
+    "• Назва посади без рівня теж працює: <i>«маркетолог»</i>, <i>«кухар»</i>\n\n"
+    "📢 Основний канал з вакансіями: {channel}"
 )
 
 def city_kb():
@@ -290,10 +312,21 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user_state[uid] = {"step": "city"}
     await update.message.reply_text(
-        f"👋 Привіт! Я допоможу знайти роботу саме для тебе.\n\n"
-        f"Підписуйся на основний канал: {MAIN_CHANNEL}\n\n"
-        f"Крок 1/5 — Оберіть місто:",
+        f"👋 Привіт! Я — бот для пошуку роботи в Україні.\n\n"
+        f"Що я вмію:\n"
+        f"• 🔍 Шукати вакансії за ключовим словом (DOU, Djinni, Jobs.ua)\n"
+        f"• 🔔 Автоматично надсилати нові вакансії за вашим профілем\n"
+        f"• 🇺🇦↔🇬🇧 Розуміти і Ukrainian, і English назви посад\n\n"
+        f"Натисніть <b>❓ Допомога</b> щоб дізнатись більше.\n\n"
+        f"Спочатку налаштуємо профіль.\nКрок 1/5 — Оберіть місто:",
+        parse_mode="HTML",
         reply_markup=city_kb()
+    )
+
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        HELP_TEXT.format(channel=MAIN_CHANNEL),
+        parse_mode="HTML", disable_web_page_preview=True, reply_markup=MAIN_KB
     )
 
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -308,6 +341,11 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if text == "⛔ Зупинити":
         deactivate_user(uid)
         await update.message.reply_text("⛔ Сповіщення зупинено. /start щоб відновити."); return
+    if text == "❓ Допомога":
+        await update.message.reply_text(
+            HELP_TEXT.format(channel=MAIN_CHANNEL),
+            parse_mode="HTML", disable_web_page_preview=True, reply_markup=MAIN_KB)
+        return
     if text == "📊 Мій профіль":
         u = get_user(uid)
         if u:
@@ -1357,6 +1395,7 @@ def main():
     init_db()
     app = Application.builder().token(PERSONAL_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",    start))
+    app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("jobs",     send_jobs_now))
     app.add_handler(CommandHandler("settings", lambda u,c: handle_settings(u,c)))
     app.add_handler(CommandHandler("stop",     lambda u,c: handle_stop(u,c)))
