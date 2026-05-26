@@ -373,6 +373,83 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=MAIN_KB
         )
 
+# ── Search helpers ────────────────────────────────────────────────────────────
+SYNONYMS: dict[str, list[str]] = {
+    "продакт":      ["product"],
+    "product":      ["продакт", "продукт"],
+    "продукт":      ["product", "продакт"],
+    "менеджер":     ["manager"],
+    "manager":      ["менеджер"],
+    "девелопер":    ["developer", "розробник"],
+    "developer":    ["девелопер", "розробник"],
+    "розробник":    ["developer", "девелопер", "програміст"],
+    "програміст":   ["developer", "programmer", "розробник"],
+    "programmer":   ["програміст", "розробник"],
+    "дизайнер":     ["designer"],
+    "designer":     ["дизайнер"],
+    "аналітик":     ["analyst"],
+    "analyst":      ["аналітик"],
+    "маркетолог":   ["marketer", "marketing"],
+    "marketing":    ["маркетолог"],
+    "marketer":     ["маркетолог"],
+    "бухгалтер":    ["accountant", "accounting"],
+    "accountant":   ["бухгалтер"],
+    "юрист":        ["lawyer", "legal"],
+    "lawyer":       ["юрист"],
+    "лікар":        ["doctor"],
+    "doctor":       ["лікар"],
+    "вчитель":      ["teacher"],
+    "teacher":      ["вчитель"],
+    "водій":        ["driver"],
+    "driver":       ["водій"],
+    "продавець":    ["sales", "seller"],
+    "sales":        ["продавець", "продажі"],
+    "продажі":      ["sales"],
+    "рекрутер":     ["recruiter", "hr"],
+    "recruiter":    ["рекрутер"],
+    "hr":           ["рекрутер", "кадри"],
+    "кадри":        ["hr", "рекрутер"],
+    "тестувальник": ["tester", "qa"],
+    "тестер":       ["tester", "qa"],
+    "tester":       ["тестувальник", "тестер"],
+    "qa":           ["тестувальник", "тестер"],
+    "підтримка":    ["support"],
+    "support":      ["підтримка"],
+    "кухар":        ["chef", "cook"],
+    "chef":         ["кухар"],
+    "cook":         ["кухар"],
+    "архітектор":   ["architect"],
+    "architect":    ["архітектор"],
+    "консультант":  ["consultant"],
+    "consultant":   ["консультант"],
+    "директор":     ["director"],
+    "director":     ["директор"],
+    "керівник":     ["head", "lead", "director"],
+    "head":         ["керівник", "лід"],
+    "lead":         ["лід", "керівник"],
+    "лід":          ["lead", "head", "senior"],
+    "senior":       ["старший", "лід"],
+    "старший":      ["senior"],
+    "junior":       ["джуніор", "молодший"],
+    "джуніор":      ["junior"],
+    "молодший":     ["junior"],
+    "middle":       ["міддл"],
+    "міддл":        ["middle"],
+}
+
+def _matches_keyword(title: str, keyword: str) -> bool:
+    """Match title against keyword using AND-across-words + synonym expansion."""
+    title_lower = title.lower()
+    words = keyword.lower().split()
+    if not words:
+        return False
+    for word in words:
+        variants = {word} | set(SYNONYMS.get(word, []))
+        if not any(v in title_lower for v in variants):
+            return False
+    return True
+
+
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 PHOTO_URLS = {
     "💻 IT / Програмування":    "https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=600",
@@ -649,7 +726,6 @@ async def send_jobs_to_user(bot, user):
 
 async def fetch_djinni_search(keyword: str) -> list:
     jobs = []
-    kw_lower = keyword.lower()
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.7"}
@@ -676,7 +752,7 @@ async def fetch_djinni_search(keyword: str) -> list:
                         found = True
                         title = item.get("title", "")
                         desc_raw = item.get("description", "")
-                        if kw_lower not in title.lower():
+                        if not _matches_keyword(title, keyword):
                             continue
                         url_job = item.get("url", "")
                         org = item.get("hiringOrganization") or {}
@@ -706,7 +782,6 @@ async def fetch_djinni_search(keyword: str) -> list:
 
 async def fetch_jobs_ua_search(keyword: str) -> list:
     jobs = []
-    kw_lower = keyword.lower()
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
     try:
@@ -720,7 +795,7 @@ async def fetch_jobs_ua_search(keyword: str) -> list:
                 if not a:
                     continue
                 title = a.get_text(strip=True)
-                if kw_lower not in title.lower():
+                if not _matches_keyword(title, keyword):
                     continue
                 href = a.get("href", "")
                 uid_part = href.rstrip("/").split("-")[-1]
@@ -744,10 +819,9 @@ async def fetch_jobs_ua_search(keyword: str) -> list:
 
 async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str):
     await update.message.reply_text(f"🔍 Шукаю «{keyword}»...", reply_markup=MAIN_KB)
-    kw_lower = keyword.lower()
 
     dou_results = await fetch_dou(keyword)
-    dou_filtered = [j for j in dou_results if kw_lower in j["title"].lower()]
+    dou_filtered = [j for j in dou_results if _matches_keyword(j["title"], keyword)]
     djinni_results = await fetch_djinni_search(keyword)
     jobsua_results = await fetch_jobs_ua_search(keyword)
 
