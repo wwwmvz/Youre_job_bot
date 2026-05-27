@@ -1336,6 +1336,17 @@ async def fetch_duties_ai(url: str) -> str:
         logger.error(f"AI fetch error: {e}")
         return ""
 
+def _matches_profession(title: str, profession_keywords: str) -> bool:
+    """True if title matches ANY word from space-separated profession_keywords."""
+    if not profession_keywords.strip():
+        return True
+    title_lower = title.lower()
+    for kw in profession_keywords.split():
+        variants = {kw} | set(SYNONYMS.get(kw, []))
+        if any(v in title_lower for v in variants):
+            return True
+    return False
+
 def salary_match(job_salary_str, user_salary):
     if not job_salary_str or not user_salary: return True
     nums = re.findall(r"\d[\d\s]*\d|\d+", job_salary_str.replace(" ",""))
@@ -1355,6 +1366,7 @@ async def send_jobs_to_user(bot, user):
     sent = 0
     for job in jobs:
         if is_sent(user["user_id"], job["id"]): continue
+        if keywords and not _matches_profession(job["title"], keywords): continue
         if not salary_match(job.get("salary",""), u_salary): continue
         city_d = job.get("city","") or city
         if any(w in city_d.lower() for w in ["дистанц","remote","home","віддал"]):
@@ -1368,6 +1380,7 @@ async def send_jobs_to_user(bot, user):
                     if dr.status_code == 200:
                         from bs4 import BeautifulSoup as BS
                         ds = BS(dr.text, "lxml")
+                        for _s in ds(["script","style","noscript"]): _s.decompose()
                         DUTY_KW = ["обов","функці","завдан","відповідальност","зона","що потрібно","що ти будеш","твої задачі","responsibilities","duties","what you","your role","you will"]
                         for tag in ds.find_all(["h2","h3","strong","b"]):
                             if any(k in tag.get_text().lower() for k in DUTY_KW):
