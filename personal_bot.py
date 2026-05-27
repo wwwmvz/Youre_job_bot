@@ -135,6 +135,11 @@ async def fetch_tg_private(keyword: str) -> list:
                 job = _parse_private_msg(text, channel, msg.id, invite_link)
                 if not job:
                     continue
+                if msg.date:
+                    try:
+                        job["posted_at"] = msg.date.replace(tzinfo=None)
+                    except Exception:
+                        pass
                 search_text = job["title"] + " " + job["desc"]
                 if keyword and not _matches_keyword(search_text, keyword):
                     continue
@@ -383,6 +388,14 @@ EXPERIENCES = ["Без досвіду","До 1 року","1-2 роки","2-5 р�
 SALARIES    = [10000,15000,20000,25000,30000,35000,40000,50000,60000,70000,80000,100000]
 SCHEDULES   = ["Кожну нову вакансію","Кожну годину","Кожні 3 години","Кожні 6 годин","Раз на день"]
 
+PERIODS = ["📅 За сьогодні", "📅 За тиждень", "📅 За місяць", "📅 Всі вакансії"]
+PERIOD_DAYS = {
+    "📅 За сьогодні": 1,
+    "📅 За тиждень":  7,
+    "📅 За місяць":   30,
+    "📅 Всі вакансії": None,
+}
+
 MAIN_KB = ReplyKeyboardMarkup(
     [[KeyboardButton("🔍 Знайти вакансії"), KeyboardButton("⚙️ Налаштування")],
      [KeyboardButton("📊 Мій профіль"),     KeyboardButton("❓ Допомога")],
@@ -434,6 +447,13 @@ def salary_kb():
 def schedule_kb():
     return ReplyKeyboardMarkup([[KeyboardButton(s)] for s in SCHEDULES], resize_keyboard=True)
 
+def period_kb():
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("📅 За сьогодні"), KeyboardButton("📅 За тиждень")],
+         [KeyboardButton("📅 За місяць"),   KeyboardButton("📅 Всі вакансії")]],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+
 # ── Handlers ──────────────────────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -484,11 +504,35 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Профіль не знайдено. Напишіть /start")
         return
 
+    # Period button — handle from any state
+    if text in PERIOD_DAYS:
+        state = user_state.get(uid, {})
+        if state.get("step") == "search_period":
+            keyword = state.get("keyword", "")
+            user_state.pop(uid, None)
+            await keyword_search(update, ctx, keyword, period=text)
+        else:
+            await update.message.reply_text("Введіть ключове слово для пошуку:", reply_markup=MAIN_KB)
+        return
+
     state = user_state.get(uid, {})
     step  = state.get("step")
 
     if not step:
-        await keyword_search(update, ctx, text)
+        user_state[uid] = {"step": "search_period", "keyword": text}
+        await update.message.reply_text(
+            f"🔍 Шукати «{text}»\n\nЗа який період показати вакансії?",
+            reply_markup=period_kb()
+        )
+        return
+
+    if step == "search_period":
+        if text not in PERIOD_DAYS:
+            await update.message.reply_text("Оберіть період 👇", reply_markup=period_kb())
+            return
+        keyword = state.get("keyword", "")
+        user_state.pop(uid, None)
+        await keyword_search(update, ctx, keyword, period=text)
         return
 
     if step == "city":
@@ -1164,9 +1208,17 @@ async def fetch_tg_channels(keyword: str) -> list:
                     text = msg_el.get_text(separator="\n", strip=True)
                     link_el = widget.select_one("a.tgme_widget_message_date")
                     msg_url = link_el["href"] if link_el else f"https://t.me/{channel}"
+                    tg_dt_str = link_el.get("datetime", "") if link_el else ""
+                    tg_posted_at = None
+                    if tg_dt_str:
+                        try:
+                            tg_posted_at = datetime.fromisoformat(tg_dt_str).replace(tzinfo=None)
+                        except Exception:
+                            pass
                     job = _parse_tg_message(text, channel, msg_url)
                     if not job:
                         continue
+                    job["posted_at"] = tg_posted_at
                     if keyword and not _matches_keyword(job["title"] + " " + job["desc"], keyword):
                         continue
                     jobs.append(job)
@@ -1210,6 +1262,30 @@ CITY_SLUGS = {
     "Кропивницький":"kropyvnytskyi","Суми":"sumy","Полтава":"poltava",
     "Миколаїв":"mykolaiv","Херсон":"kherson","Ірпінь":"irpin","Буча":"bucha",
 }
+
+_DOU_MONTHS = {
+    "січ": 1, "лют": 2, "бер": 3, "кві": 4, "тра": 5, "трав": 5,
+    "чер": 6, "лип": 7, "сер": 8, "вер": 9, "жов": 10, "лис": 11, "гру": 12,
+}
+
+def _parse_dou_date(date_str: str):
+    if not date_str:
+        return None
+    parts = date_str.lower().strip().split()
+    if len(parts) < 2:
+        return None
+    try:
+        day = int(parts[0])
+        month = _DOU_MONTHS.get(parts[1][:3])
+        if not month:
+            return None
+        year = datetime.utcnow().year
+        dt = datetime(year, month, day)
+        if dt > datetime.utcnow() + timedelta(days=1):
+            dt = datetime(year - 1, month, day)
+        return dt
+    except Exception:
+        return None
 
 async def fetch_workua(city, keywords):
     jobs = []
@@ -1270,9 +1346,12 @@ async def fetch_dou(keywords):
                 salary  = sal_tag.get_text(strip=True) if sal_tag else ""
                 desc_tag = li.select_one(".sh-info")
                 desc    = desc_tag.get_text(strip=True)[:200] if desc_tag else ""
+                date_tag = li.select_one(".date")
+                posted_at = _parse_dou_date(date_tag.get_text(strip=True)) if date_tag else None
                 job_id  = f"dou_{link.split('/')[-2]}"
                 jobs.append({"id":job_id,"title":title,"company":company,"salary":salary,
-                             "city":city,"desc":desc,"url":link,"source":"DOU.ua"})
+                             "city":city,"desc":desc,"url":link,"source":"DOU.ua",
+                             "posted_at": posted_at})
     except Exception as e:
         logger.error(f"DOU error: {e}")
     return jobs
@@ -1514,9 +1593,17 @@ async def fetch_djinni_search(keyword: str) -> list:
                                 elif mn or mx:
                                     salary = f"{mn or mx} {cur}"
                         job_id = "djinni_" + url_job.rstrip("/").split("/")[-1]
+                        date_str = item.get("datePosted", "")
+                        posted_at = None
+                        if date_str:
+                            try:
+                                posted_at = datetime.fromisoformat(date_str[:10])
+                            except Exception:
+                                pass
                         jobs.append({"id": job_id, "title": title, "company": company,
                                      "salary": salary, "city": city, "desc": desc_raw[:200],
-                                     "url": url_job, "source": "Djinni"})
+                                     "url": url_job, "source": "Djinni",
+                                     "posted_at": posted_at})
                 if not found:
                     break
     except Exception as e:
@@ -1671,17 +1758,26 @@ async def _send_job_cards(update: Update, jobs: list):
             logger.error(f"Search send error: {e}")
 
 
-async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str):
-    await update.message.reply_text(f"🔍 Шукаю «{keyword}»...", reply_markup=MAIN_KB)
+def _filter_by_period(jobs: list, period: str) -> list:
+    days = PERIOD_DAYS.get(period)
+    if days is None:
+        return jobs
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    return [j for j in jobs if j.get("posted_at") is None or j["posted_at"] >= cutoff]
 
-    unique = await _search_all_sources(keyword)
+
+async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str, period: str = "📅 Всі вакансії"):
+    period_label = "" if period == "📅 Всі вакансії" else f" ({period.replace('📅 ', '')})"
+    await update.message.reply_text(f"🔍 Шукаю «{keyword}»{period_label}...", reply_markup=MAIN_KB)
+
+    unique = _filter_by_period(await _search_all_sources(keyword), period)
 
     if not unique:
         # AI fallback: normalize/translate the query and retry
         ai_kw = await _ai_normalize_query(keyword)
         if ai_kw and ai_kw.strip().lower() != keyword.strip().lower():
             logger.info(f"AI normalized '{keyword}' → '{ai_kw}'")
-            unique = await _search_all_sources(ai_kw)
+            unique = _filter_by_period(await _search_all_sources(ai_kw), period)
             if unique:
                 await update.message.reply_text(
                     f"🤖 Знайшов за запитом «{ai_kw}» — {len(unique[:10])} вакансій:"
@@ -1689,12 +1785,12 @@ async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword
                 await _send_job_cards(update, unique)
                 return
         await update.message.reply_text(
-            f"😔 Нічого не знайдено по запиту «{keyword}».\nСпробуйте інше ключове слово.",
+            f"😔 Нічого не знайдено по запиту «{keyword}»{period_label}.\nСпробуйте інше ключове слово або розширте період.",
             reply_markup=MAIN_KB
         )
         return
 
-    await update.message.reply_text(f"✅ Знайдено {len(unique[:10])} вакансій по запиту «{keyword}»:")
+    await update.message.reply_text(f"✅ Знайдено {len(unique[:10])} вакансій по запиту «{keyword}»{period_label}:")
     await _send_job_cards(update, unique)
 
 
