@@ -1055,6 +1055,43 @@ SYNONYMS: dict[str, list[str]] = {
     "interpreter":   ["перекладач", "перекладачка"],
     "localization":  ["локалізація"],
     "локалізація":   ["localization"],
+
+    # ── Russian synonyms ──────────────────────────────────────────────────────
+    "разработчик":   ["розробник", "developer"],
+    "программист":   ["програміст", "developer"],
+    "тестировщик":   ["тестувальник", "qa"],
+    "водитель":      ["водій", "driver"],
+    "продавец":      ["продавець", "sales"],
+    "аналитик":      ["аналітик", "analyst"],
+    "рекрутер":      ["recruiter", "hr"],
+    "логист":        ["логіст", "logistics"],
+    "кладовщик":     ["комірник", "warehouse"],
+    "курьер":        ["кур'єр", "courier"],
+    "повар":         ["кухар", "chef"],
+    "официант":      ["офіціант", "waiter"],
+    "уборщик":       ["прибиральник", "cleaner"],
+    "охранник":      ["охоронець", "guard"],
+    "строитель":     ["будівельник", "construction"],
+    "сварщик":       ["зварювальник", "welder"],
+    "электрик":      ["електрик", "electrician"],
+    "врач":          ["лікар", "doctor"],
+    "учитель":       ["вчитель", "teacher"],
+    "арбитражник":   ["арбітражник", "traffic manager", "media buyer"],
+    "арбітражник":   ["traffic manager", "media buyer", "арбитражник"],
+    "трафик":        ["traffic", "трафік"],
+    "трафік":        ["traffic", "трафик"],
+    "обработчик":    ["менеджер", "оператор", "manager"],
+    "закупщик":      ["байєр", "buyer", "закупівлі"],
+    "байєр":         ["buyer", "media buyer", "закупщик"],
+    "байер":         ["buyer", "media buyer", "байєр"],
+    "медиабайер":    ["media buyer", "медіабаєр"],
+    "медіабаєр":     ["media buyer", "медиабайер"],
+    "блогер":        ["blogger", "influencer", "блоггер"],
+    "блоггер":       ["blogger", "блогер"],
+    "blogger":       ["блогер", "блоггер"],
+    "инфлюенсер":    ["influencer", "блогер"],
+    "influencer":    ["блогер", "інфлюенсер"],
+    "інфлюенсер":    ["influencer", "блогер"],
 }
 
 def _matches_keyword(title: str, keyword: str) -> bool:
@@ -1554,22 +1591,45 @@ async def fetch_jobs_ua_search(keyword: str) -> list:
     return jobs
 
 
-async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str):
-    await update.message.reply_text(f"🔍 Шукаю «{keyword}»...", reply_markup=MAIN_KB)
+async def _ai_normalize_query(query: str):
+    """Use Claude Haiku to extract job title keywords from any language/natural language query."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 20,
+                    "messages": [{"role": "user", "content": (
+                        "Визнач назву посади/професії з цього пошукового запиту. "
+                        "Відповідь: тільки 1-3 ключових слова (назва посади) для пошуку вакансій, без пояснень, без розділових знаків. "
+                        "Якщо запит вже є назвою посади — поверни його як є. "
+                        f"Запит: {query}"
+                    )}]
+                }
+            )
+            result = r.json().get("content", [{}])[0].get("text", "").strip().lower()
+            return result if len(result) > 2 else None
+    except Exception as e:
+        logger.error(f"AI normalize error: {e}")
+        return None
 
+
+async def _search_all_sources(keyword: str) -> list:
+    """Search all sources and return deduplicated list."""
     dou_r, djinni_r, jobsua_r, workua_r, tg_r, tgp_r = await asyncio.gather(
-        fetch_dou(keyword),
-        fetch_djinni_search(keyword),
-        fetch_jobs_ua_search(keyword),
-        fetch_workua_search(keyword),
-        fetch_tg_channels(keyword),
-        fetch_tg_private(keyword),
+        fetch_dou(keyword), fetch_djinni_search(keyword),
+        fetch_jobs_ua_search(keyword), fetch_workua_search(keyword),
+        fetch_tg_channels(keyword), fetch_tg_private(keyword),
         return_exceptions=True,
     )
     def _safe(r): return r if isinstance(r, list) else []
     dou_filtered = [j for j in _safe(dou_r) if _matches_keyword(j["title"], keyword)]
     all_jobs = dou_filtered + _safe(djinni_r) + _safe(jobsua_r) + _safe(workua_r) + _safe(tg_r) + _safe(tgp_r)
-
     seen = set()
     unique = []
     for job in all_jobs:
@@ -1577,16 +1637,11 @@ async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword
         if key not in seen:
             seen.add(key)
             unique.append(job)
+    return unique
 
-    if not unique:
-        await update.message.reply_text(
-            f"😔 Нічого не знайдено по запиту «{keyword}».\nСпробуйте інше ключове слово.",
-            reply_markup=MAIN_KB
-        )
-        return
 
-    await update.message.reply_text(f"✅ Знайдено {len(unique[:10])} вакансій по запиту «{keyword}»:")
-    for i, job in enumerate(unique[:10], 1):
+async def _send_job_cards(update: Update, jobs: list):
+    for i, job in enumerate(jobs[:10], 1):
         city_d = job.get("city", "Україна")
         loc = "🌐 Віддалено" if any(w in city_d.lower() for w in ["дистанц","remote","віддал"]) else f"📍 {city_d}"
         lines = [f"<b>{i}. {job['title']}</b>", f"🏢 {job['company']}", loc]
@@ -1608,6 +1663,33 @@ async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword
             await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
         except Exception as e:
             logger.error(f"Search send error: {e}")
+
+
+async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str):
+    await update.message.reply_text(f"🔍 Шукаю «{keyword}»...", reply_markup=MAIN_KB)
+
+    unique = await _search_all_sources(keyword)
+
+    if not unique:
+        # AI fallback: normalize/translate the query and retry
+        ai_kw = await _ai_normalize_query(keyword)
+        if ai_kw and ai_kw.strip().lower() != keyword.strip().lower():
+            logger.info(f"AI normalized '{keyword}' → '{ai_kw}'")
+            unique = await _search_all_sources(ai_kw)
+            if unique:
+                await update.message.reply_text(
+                    f"🤖 Знайшов за запитом «{ai_kw}» — {len(unique[:10])} вакансій:"
+                )
+                await _send_job_cards(update, unique)
+                return
+        await update.message.reply_text(
+            f"😔 Нічого не знайдено по запиту «{keyword}».\nСпробуйте інше ключове слово.",
+            reply_markup=MAIN_KB
+        )
+        return
+
+    await update.message.reply_text(f"✅ Знайдено {len(unique[:10])} вакансій по запиту «{keyword}»:")
+    await _send_job_cards(update, unique)
 
 
 async def send_jobs_now(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
