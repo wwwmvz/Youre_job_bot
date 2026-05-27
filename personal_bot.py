@@ -230,6 +230,14 @@ def init_db():
                 PRIMARY KEY (user_id, job_id)
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS keyword_shown (
+                user_id BIGINT, keyword TEXT,
+                job_ids TEXT DEFAULT '[]',
+                updated_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (user_id, keyword)
+            )
+        """)
     else:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -245,6 +253,14 @@ def init_db():
             CREATE TABLE IF NOT EXISTS sent_jobs (
                 user_id INTEGER, job_id TEXT,
                 sent_at TEXT, PRIMARY KEY (user_id, job_id)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS keyword_shown (
+                user_id INTEGER, keyword TEXT,
+                job_ids TEXT DEFAULT '[]',
+                updated_at TEXT,
+                PRIMARY KEY (user_id, keyword)
             )
         """)
     conn.commit()
@@ -327,6 +343,44 @@ def is_sent(user_id, job_id):
     res = cur.fetchone()
     conn.close()
     return res is not None
+
+def load_keyword_shown(user_id: int, keyword: str) -> set:
+    conn, mode = get_db()
+    cur = conn.cursor()
+    try:
+        if mode == "pg":
+            cur.execute("SELECT job_ids FROM keyword_shown WHERE user_id=%s AND keyword=%s", (user_id, keyword))
+        else:
+            cur.execute("SELECT job_ids FROM keyword_shown WHERE user_id=? AND keyword=?", (user_id, keyword))
+        row = cur.fetchone()
+        conn.close()
+        return set(json.loads(row[0])) if row else set()
+    except Exception as e:
+        logger.error(f"load_keyword_shown error: {e}")
+        conn.close()
+        return set()
+
+def save_keyword_shown(user_id: int, keyword: str, job_ids: set):
+    conn, mode = get_db()
+    cur = conn.cursor()
+    ids_json = json.dumps(list(job_ids))
+    now = datetime.utcnow().isoformat()
+    try:
+        if mode == "pg":
+            cur.execute("""
+                INSERT INTO keyword_shown (user_id, keyword, job_ids, updated_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (user_id, keyword) DO UPDATE SET job_ids=EXCLUDED.job_ids, updated_at=NOW()
+            """, (user_id, keyword, ids_json))
+        else:
+            cur.execute("""
+                INSERT OR REPLACE INTO keyword_shown (user_id, keyword, job_ids, updated_at)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, keyword, ids_json, now))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"save_keyword_shown error: {e}")
+    conn.close()
 
 def get_all_active_users():
     conn, mode = get_db()
@@ -1999,6 +2053,20 @@ async def _offer_repeat_search(update: Update, uid: int, keyword: str, period: s
     )
 
 
+def _get_shown(uid: int, kw_key: str) -> set:
+    """Return shown job IDs from in-memory cache, loading from DB on miss."""
+    if uid in _keyword_shown and kw_key in _keyword_shown[uid]:
+        return _keyword_shown[uid][kw_key]
+    ids = load_keyword_shown(uid, kw_key)
+    _keyword_shown.setdefault(uid, {})[kw_key] = ids
+    return ids
+
+def _set_shown(uid: int, kw_key: str, ids: set):
+    """Write shown job IDs to both in-memory cache and DB."""
+    _keyword_shown.setdefault(uid, {})[kw_key] = ids
+    save_keyword_shown(uid, kw_key, ids)
+
+
 async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str, period: str = "📅 Всі вакансії"):
     uid = update.effective_user.id
     period_label = "" if period == "📅 Всі вакансії" else f" ({period.replace('📅 ', '')})"
@@ -2014,10 +2082,10 @@ async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword
             ai_jobs = _filter_by_period(await _search_all_sources(ai_kw), period)
             if ai_jobs:
                 kw_key = ai_kw.strip().lower()
-                shown = _keyword_shown.get(uid, {}).get(kw_key, set())
+                shown = _get_shown(uid, kw_key)
                 new_jobs = [j for j in ai_jobs if j["id"] not in shown]
                 if new_jobs:
-                    _keyword_shown.setdefault(uid, {})[kw_key] = shown | {j["id"] for j in new_jobs}
+                    _set_shown(uid, kw_key, shown | {j["id"] for j in new_jobs})
                     await update.message.reply_text(
                         f"🤖 Знайшов за запитом «{ai_kw}» — <b>{len(new_jobs)}</b> вакансій{period_label}:",
                         parse_mode="HTML"
@@ -2033,14 +2101,14 @@ async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword
         return
 
     kw_key = keyword.strip().lower()
-    shown = _keyword_shown.get(uid, {}).get(kw_key, set())
+    shown = _get_shown(uid, kw_key)
     new_jobs = [j for j in all_jobs if j["id"] not in shown]
 
     if not new_jobs:
         await _offer_repeat_search(update, uid, keyword, period, all_jobs, period_label)
         return
 
-    _keyword_shown.setdefault(uid, {})[kw_key] = shown | {j["id"] for j in new_jobs}
+    _set_shown(uid, kw_key, shown | {j["id"] for j in new_jobs})
     await update.message.reply_text(
         f"✅ Знайдено <b>{len(new_jobs)}</b> нових вакансій по запиту «{keyword}»{period_label}:",
         parse_mode="HTML"
