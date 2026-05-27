@@ -19,7 +19,7 @@ nest_asyncio.apply()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-PERSONAL_BOT_TOKEN = os.environ.get("PERSONAL_BOT_TOKEN")
+PERSONAL_BOT_TOKEN = os.environ.get("PERSONAL_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
 MAIN_CHANNEL       = os.environ.get("MAIN_CHANNEL", "https://t.me/+YNCaw9gBllI5NzU0")
 DATABASE_URL       = os.environ.get("DATABASE_URL",        "")
 TG_API_ID   = os.environ.get("TG_API_ID",  "")
