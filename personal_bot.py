@@ -25,6 +25,7 @@ DATABASE_URL       = os.environ.get("DATABASE_URL",        "")
 TG_API_ID   = os.environ.get("TG_API_ID",  "")
 TG_API_HASH = os.environ.get("TG_API_HASH", "")
 TG_SESSION  = os.environ.get("TG_SESSION",  "")
+ADMIN_ID    = int(os.environ.get("ADMIN_ID", "0"))
 
 # Public channels — scraped via t.me/s/ (no auth)
 TG_JOB_CHANNELS = [
@@ -238,6 +239,21 @@ def init_db():
                 PRIMARY KEY (user_id, keyword)
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS direct_vacancies (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                company TEXT NOT NULL,
+                city TEXT DEFAULT '',
+                salary TEXT DEFAULT '',
+                description TEXT DEFAULT '',
+                contact TEXT DEFAULT '',
+                url TEXT DEFAULT '',
+                keywords TEXT DEFAULT '',
+                posted_at TIMESTAMP DEFAULT NOW(),
+                active BOOLEAN DEFAULT TRUE
+            )
+        """)
     else:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -261,6 +277,21 @@ def init_db():
                 job_ids TEXT DEFAULT '[]',
                 updated_at TEXT,
                 PRIMARY KEY (user_id, keyword)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS direct_vacancies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                company TEXT NOT NULL,
+                city TEXT DEFAULT '',
+                salary TEXT DEFAULT '',
+                description TEXT DEFAULT '',
+                contact TEXT DEFAULT '',
+                url TEXT DEFAULT '',
+                keywords TEXT DEFAULT '',
+                posted_at TEXT,
+                active INTEGER DEFAULT 1
             )
         """)
     conn.commit()
@@ -381,6 +412,64 @@ def save_keyword_shown(user_id: int, keyword: str, job_ids: set):
     except Exception as e:
         logger.error(f"save_keyword_shown error: {e}")
     conn.close()
+
+def save_direct_vacancy(title, company, city, salary, description, contact, url, keywords):
+    conn, mode = get_db()
+    cur = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    if mode == "pg":
+        cur.execute("""
+            INSERT INTO direct_vacancies (title,company,city,salary,description,contact,url,keywords,posted_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW()) RETURNING id
+        """, (title, company, city, salary, description, contact, url, keywords))
+        row = cur.fetchone()
+        vac_id = row[0] if row else None
+    else:
+        cur.execute("""
+            INSERT INTO direct_vacancies (title,company,city,salary,description,contact,url,keywords,posted_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (title, company, city, salary, description, contact, url, keywords, now))
+        vac_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return vac_id
+
+def get_direct_vacancies(keyword: str = "") -> list:
+    conn, mode = get_db()
+    cur = conn.cursor()
+    if mode == "pg":
+        cur.execute("SELECT id,title,company,city,salary,description,contact,url,keywords,posted_at FROM direct_vacancies WHERE active=TRUE ORDER BY posted_at DESC")
+    else:
+        cur.execute("SELECT id,title,company,city,salary,description,contact,url,keywords,posted_at FROM direct_vacancies WHERE active=1 ORDER BY posted_at DESC")
+    rows = cur.fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        vac_id, title, company, city, salary, description, contact, url, kw_field, posted_at = r
+        if keyword:
+            kw_lower = keyword.lower()
+            searchable = f"{title} {company} {kw_field} {description}".lower()
+            if not any(w in searchable for w in kw_lower.split()):
+                continue
+        if isinstance(posted_at, str):
+            try:
+                posted_at = datetime.fromisoformat(posted_at)
+            except Exception:
+                posted_at = None
+        job = {
+            "id": f"direct_{vac_id}",
+            "title": title,
+            "company": company,
+            "city": city or "",
+            "salary": salary or "",
+            "desc": description or "",
+            "url": url or f"tg://user?id={ADMIN_ID}",
+            "source": "📌 Пряма вакансія",
+            "posted_at": posted_at,
+            "contact": contact,
+        }
+        result.append(job)
+    return result
 
 def get_all_active_users():
     conn, mode = get_db()
@@ -532,6 +621,122 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML", disable_web_page_preview=True, reply_markup=MAIN_KB
     )
 
+_POST_STEPS = ["title", "company", "city", "salary", "description", "contact", "url", "keywords"]
+_POST_PROMPTS = {
+    "title":       "📝 Назва вакансії (напр. «Python Developer»):",
+    "company":     "🏢 Назва компанії:",
+    "city":        "📍 Місто (або «Віддалено»):",
+    "salary":      "💰 Зарплата (або «-» якщо не вказувати):",
+    "description": "📋 Короткий опис вакансії (або «-»):",
+    "contact":     "📞 Контакт для зв'язку (ім'я, телефон або @username):",
+    "url":         "🔗 Посилання на вакансію (або «-» якщо немає):",
+    "keywords":    "🔑 Ключові слова через кому (напр. «python, backend, django»):",
+}
+
+async def cmd_post(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if ADMIN_ID and uid != ADMIN_ID:
+        await update.message.reply_text("⛔ Ця команда тільки для адміністратора."); return
+    user_state[uid] = {"step": "post_title", "post_data": {}}
+    await update.message.reply_text(
+        "📌 <b>Розміщення прямої вакансії</b>\n\nВведіть дані крок за кроком.\n\n" + _POST_PROMPTS["title"],
+        parse_mode="HTML"
+    )
+
+async def _handle_post_step(update: Update, uid: int, state: dict, text: str, ctx):
+    post_data = state.get("post_data", {})
+    current = state["step"].replace("post_", "")  # e.g. "post_title" -> "title"
+
+    post_data[current] = "" if text.strip() == "-" else text.strip()
+    state["post_data"] = post_data
+
+    step_index = _POST_STEPS.index(current)
+    if step_index + 1 < len(_POST_STEPS):
+        next_step = _POST_STEPS[step_index + 1]
+        state["step"] = f"post_{next_step}"
+        user_state[uid] = state
+        await update.message.reply_text(_POST_PROMPTS[next_step])
+    else:
+        # All steps done — save and broadcast
+        user_state.pop(uid, None)
+        vac_id = save_direct_vacancy(
+            title=post_data.get("title", ""),
+            company=post_data.get("company", ""),
+            city=post_data.get("city", ""),
+            salary=post_data.get("salary", ""),
+            description=post_data.get("description", ""),
+            contact=post_data.get("contact", ""),
+            url=post_data.get("url", ""),
+            keywords=post_data.get("keywords", ""),
+        )
+        preview = (
+            f"✅ Вакансія #{vac_id} збережена!\n\n"
+            f"<b>{post_data.get('title')}</b>\n"
+            f"🏢 {post_data.get('company')}\n"
+            f"📍 {post_data.get('city') or '—'}\n"
+            f"💰 {post_data.get('salary') or '—'}\n"
+            f"📞 {post_data.get('contact') or '—'}\n"
+            f"🔑 {post_data.get('keywords') or '—'}\n\n"
+            "Розсилаю зацікавленим користувачам..."
+        )
+        await update.message.reply_text(preview, parse_mode="HTML", reply_markup=MAIN_KB)
+        await _broadcast_direct_vacancy(ctx.bot, post_data, vac_id)
+
+async def _broadcast_direct_vacancy(bot, post_data: dict, vac_id: int):
+    keywords = post_data.get("keywords", "")
+    kw_list = [k.strip().lower() for k in keywords.split(",") if k.strip()]
+    title_words = post_data.get("title", "").lower().split()
+    search_words = list(set(kw_list + title_words))
+
+    users = get_all_active_users()
+    sent_count = 0
+    city = post_data.get("city", "")
+    salary = post_data.get("salary", "")
+    description = post_data.get("description", "")
+    contact = post_data.get("contact", "")
+    url = post_data.get("url", "")
+
+    text = (
+        f"📌 <b>Нова пряма вакансія!</b>\n\n"
+        f"<b>{post_data.get('title')}</b>\n"
+        f"🏢 {post_data.get('company')}\n"
+    )
+    if city:
+        text += f"📍 {city}\n"
+    if salary:
+        text += f"💰 {salary}\n"
+    if description:
+        text += f"\n📋 {description[:300]}{'…' if len(description)>300 else ''}\n"
+    if contact:
+        text += f"\n📞 Контакт: {contact}"
+    if url:
+        text += f"\n🔗 <a href='{url}'>Детальніше</a>"
+
+    for user in users:
+        uid = user[0]
+        user_prof = (user[2] or "").lower()  # profession keywords
+        user_city = (user[1] or "").lower()
+
+        # Match by keywords or profession
+        matches = any(w in user_prof for w in search_words) or any(w in keywords.lower() for w in user_prof.split())
+        if not matches and not kw_list:
+            matches = True  # no keywords set — broadcast to all
+
+        # City filter: skip if user has a city that doesn't match (allow remote/empty)
+        if user_city and city and city.lower() not in ("віддалено", "remote", "україна", ""):
+            if user_city not in city.lower() and city.lower() not in user_city:
+                pass  # still send — job postings are rare, don't over-filter
+
+        if matches:
+            try:
+                await bot.send_message(uid, text, parse_mode="HTML", disable_web_page_preview=True)
+                sent_count += 1
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                logger.warning(f"Broadcast to {uid} failed: {e}")
+
+    logger.info(f"Direct vacancy #{vac_id} broadcast to {sent_count}/{len(users)} users")
+
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     text = update.message.text.strip()
@@ -574,6 +779,9 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     state = user_state.get(uid, {})
     step  = state.get("step")
+
+    if step and step.startswith("post_"):
+        await _handle_post_step(update, uid, state, text, ctx); return
 
     if not step:
         user_profile = get_user(uid)
@@ -1989,8 +2197,9 @@ async def _search_all_sources(keyword: str) -> list:
         return_exceptions=True,
     )
     def _safe(r): return r if isinstance(r, list) else []
+    direct = get_direct_vacancies(keyword)
     dou_filtered = [j for j in _safe(dou_r) if _matches_keyword(j["title"], keyword)]
-    all_jobs = dou_filtered + _safe(djinni_r) + _safe(jobsua_r) + _safe(workua_r) + _safe(robota_r) + _safe(tg_r) + _safe(tgp_r)
+    all_jobs = direct + dou_filtered + _safe(djinni_r) + _safe(jobsua_r) + _safe(workua_r) + _safe(robota_r) + _safe(tg_r) + _safe(tgp_r)
     seen = set()
     unique = []
     for job in all_jobs:
@@ -2027,7 +2236,7 @@ async def _send_job_cards(update: Update, jobs: list):
             logger.error(f"Search send error: {e}")
 
 
-_SOURCE_ORDER = ["DOU.ua", "Djinni", "Work.ua", "Robota.ua", "Jobs.ua", "TG канали", "TG (приватний)"]
+_SOURCE_ORDER = ["📌 Пряма вакансія", "DOU.ua", "Djinni", "Work.ua", "Robota.ua", "Jobs.ua", "TG канали", "TG (приватний)"]
 
 async def _send_grouped(update: Update, jobs: list):
     """Send results grouped by source, up to 10 per source, one message per group."""
@@ -2232,6 +2441,7 @@ def main():
     app.add_handler(CommandHandler("jobs",     send_jobs_now))
     app.add_handler(CommandHandler("settings", lambda u,c: handle_settings(u,c)))
     app.add_handler(CommandHandler("stop",     lambda u,c: handle_stop(u,c)))
+    app.add_handler(CommandHandler("post",     cmd_post))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     if app.job_queue:
         app.job_queue.run_repeating(scheduled_sender, interval=3600, first=60)
