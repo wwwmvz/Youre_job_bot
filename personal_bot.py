@@ -51,8 +51,9 @@ TG_JOB_CHANNELS = [
 # Private channels — read via Telethon.
 # Each entry: channel_id  OR  (channel_id, invite_link)
 # Generate invite link in Telegram: channel → Manage → Invite Links → Create Link
+# NOTE: do NOT add channels that are already in TG_JOB_CHANNELS — they'd be scraped twice
 TG_PRIVATE_CHANNELS: list = [
-    (-1001644192069, ""),  # replace "" with t.me/+HASH invite link
+    # add truly private channels here, e.g.: (-1001234567890, "https://t.me/+HASH")
 ]
 
 _tg_client = None
@@ -89,6 +90,7 @@ def _parse_private_msg(text: str, channel, msg_id: int, invite_link: str = ""):
     if not lines:
         return None
     title = lines[0].lstrip("#*•➡️🔹🔸▪️◾️✅🚀💼📌🔔⚡🔴🟢🟡").strip()
+    title = re.sub(r"\*+", "", title).strip()  # strip Telegram markdown **bold**
     if len(title) < 5 or len(title) > 150:
         return None
     salary = ""
