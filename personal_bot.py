@@ -1330,28 +1330,32 @@ async def fetch_dou(keywords):
         else:
             url = "https://jobs.dou.ua/vacancies/"
         async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
-            r = await client.get(url)
-            if r.status_code != 200: return jobs
-            soup = BeautifulSoup(r.text, "lxml")
-            for li in soup.select("li.l-vacancy")[:20]:
-                a = li.select_one("a.vt")
-                if not a: continue
-                title   = a.get_text(strip=True)
-                link    = a["href"]
-                company = li.select_one(".company")
-                company = company.get_text(strip=True) if company else "Компанія"
-                city_tag = li.select_one(".cities")
-                city    = city_tag.get_text(strip=True) if city_tag else "Україна"
-                sal_tag = li.select_one(".salary")
-                salary  = sal_tag.get_text(strip=True) if sal_tag else ""
-                desc_tag = li.select_one(".sh-info")
-                desc    = desc_tag.get_text(strip=True)[:200] if desc_tag else ""
-                date_tag = li.select_one(".date")
-                posted_at = _parse_dou_date(date_tag.get_text(strip=True)) if date_tag else None
-                job_id  = f"dou_{link.split('/')[-2]}"
-                jobs.append({"id":job_id,"title":title,"company":company,"salary":salary,
-                             "city":city,"desc":desc,"url":link,"source":"DOU.ua",
-                             "posted_at": posted_at})
+            for page in range(1, 4):
+                page_url = url if page == 1 else (url + f"&page={page}" if "?" in url else url + f"?page={page}")
+                r = await client.get(page_url)
+                if r.status_code != 200: break
+                soup = BeautifulSoup(r.text, "lxml")
+                items = soup.select("li.l-vacancy")
+                if not items: break
+                for li in items:
+                    a = li.select_one("a.vt")
+                    if not a: continue
+                    title   = a.get_text(strip=True)
+                    link    = a["href"]
+                    company = li.select_one(".company")
+                    company = company.get_text(strip=True) if company else "Компанія"
+                    city_tag = li.select_one(".cities")
+                    city    = city_tag.get_text(strip=True) if city_tag else "Україна"
+                    sal_tag = li.select_one(".salary")
+                    salary  = sal_tag.get_text(strip=True) if sal_tag else ""
+                    desc_tag = li.select_one(".sh-info")
+                    desc    = desc_tag.get_text(strip=True)[:200] if desc_tag else ""
+                    date_tag = li.select_one(".date")
+                    posted_at = _parse_dou_date(date_tag.get_text(strip=True)) if date_tag else None
+                    job_id  = f"dou_{link.split('/')[-2]}"
+                    jobs.append({"id":job_id,"title":title,"company":company,"salary":salary,
+                                 "city":city,"desc":desc,"url":link,"source":"DOU.ua",
+                                 "posted_at": posted_at})
     except Exception as e:
         logger.error(f"DOU error: {e}")
     return jobs
@@ -1651,34 +1655,46 @@ async def fetch_jobs_ua_search(keyword: str) -> list:
     jobs = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+    seen_ids = set()
     try:
         async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
-            r = await client.get(f"https://jobs.ua/ukr/vacancy/?search_phrase={quote_plus(keyword)}")
-            if r.status_code != 200:
-                return jobs
-            soup = BeautifulSoup(r.text, "html.parser")
-            for card in soup.select("li.b-vacancy__item"):
-                a = card.select_one("a.b-vacancy__top__title")
-                if not a:
-                    continue
-                title = a.get_text(strip=True)
-                if not _matches_keyword(title, keyword):
-                    continue
-                href = a.get("href", "")
-                uid_part = href.rstrip("/").split("-")[-1]
-                sal_el = card.select_one("span.b-vacancy__top__pay")
-                salary = re.sub(r"\s+", " ", sal_el.get_text(strip=True)) if sal_el else ""
-                tech = card.select("span.b-vacancy__tech__item")
-                company = tech[0].get_text(strip=True) if tech else "Компанія"
-                location = ""
-                for item in tech[1:]:
-                    if item.select_one("i.fa-map-marker"):
-                        loc_a = item.select_one("a")
-                        location = loc_a.get_text(strip=True) if loc_a else ""
-                        break
-                jobs.append({"id": f"jobs_{uid_part}", "title": title, "company": company,
-                             "salary": salary, "city": location or "Україна",
-                             "desc": "", "url": href, "source": "Jobs.ua"})
+            for page in range(1, 4):
+                if page == 1:
+                    url = f"https://jobs.ua/ukr/vacancy/?search_phrase={quote_plus(keyword)}"
+                else:
+                    url = f"https://jobs.ua/ukr/vacancy/page-{page}?search_phrase={quote_plus(keyword)}"
+                r = await client.get(url)
+                if r.status_code != 200:
+                    break
+                soup = BeautifulSoup(r.text, "html.parser")
+                cards = soup.select("li.b-vacancy__item")
+                if not cards:
+                    break
+                for card in cards:
+                    a = card.select_one("a.b-vacancy__top__title")
+                    if not a:
+                        continue
+                    title = a.get_text(strip=True)
+                    if not _matches_keyword(title, keyword):
+                        continue
+                    href = a.get("href", "")
+                    uid_part = href.rstrip("/").split("-")[-1]
+                    if uid_part in seen_ids:
+                        continue
+                    seen_ids.add(uid_part)
+                    sal_el = card.select_one("span.b-vacancy__top__pay")
+                    salary = re.sub(r"\s+", " ", sal_el.get_text(strip=True)) if sal_el else ""
+                    tech = card.select("span.b-vacancy__tech__item")
+                    company = tech[0].get_text(strip=True) if tech else "Компанія"
+                    location = ""
+                    for item in tech[1:]:
+                        if item.select_one("i.fa-map-marker"):
+                            loc_a = item.select_one("a")
+                            location = loc_a.get_text(strip=True) if loc_a else ""
+                            break
+                    jobs.append({"id": f"jobs_{uid_part}", "title": title, "company": company,
+                                 "salary": salary, "city": location or "Україна",
+                                 "desc": "", "url": href, "source": "Jobs.ua"})
     except Exception as e:
         logger.error(f"Jobs.ua search error: {e}")
     return jobs
@@ -1734,6 +1750,7 @@ async def _search_all_sources(keyword: str) -> list:
 
 
 async def _send_job_cards(update: Update, jobs: list):
+    """Legacy: single flat list. Used by AI fallback."""
     for i, job in enumerate(jobs[:10], 1):
         city_d = job.get("city", "Україна")
         loc = "🌐 Віддалено" if any(w in city_d.lower() for w in ["дистанц","remote","віддал"]) else f"📍 {city_d}"
@@ -1758,6 +1775,52 @@ async def _send_job_cards(update: Update, jobs: list):
             logger.error(f"Search send error: {e}")
 
 
+_SOURCE_ORDER = ["DOU.ua", "Djinni", "Work.ua", "Jobs.ua", "TG канали", "TG (приватний)"]
+
+async def _send_grouped(update: Update, jobs: list):
+    """Send results grouped by source, up to 10 per source, one message per group."""
+    by_source: dict = {}
+    for job in jobs:
+        src = job["source"]
+        if src.startswith("TG @"):
+            src = "TG канали"
+        by_source.setdefault(src, []).append(job)
+
+    sources = sorted(by_source.keys(),
+                     key=lambda s: _SOURCE_ORDER.index(s) if s in _SOURCE_ORDER else 99)
+
+    for src in sources:
+        group = by_source[src][:10]
+        lines = [f"<b>📌 {src} — {len(group)} вакансій</b>\n"]
+        for i, job in enumerate(group, 1):
+            city_d = job.get("city", "")
+            if any(w in city_d.lower() for w in ["дистанц", "remote", "віддал"]):
+                loc = " · 🌐 Віддалено"
+            elif city_d and city_d != "Україна":
+                loc = f" · 📍 {city_d}"
+            else:
+                loc = ""
+            sal = f" · 💰 {job['salary']}" if job.get("salary") else ""
+            invite = ""
+            if job.get("invite_link"):
+                invite = f" · <a href='{job['invite_link']}'>Вступити</a>"
+            lines.append(
+                f"{i}. <a href='{job['url']}'><b>{job['title']}</b></a>\n"
+                f"   🏢 {job['company']}{sal}{loc}{invite}"
+            )
+        text = "\n".join(lines)
+        if len(text) > 4096:
+            text = text[:4090] + "…"
+        try:
+            await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+            await asyncio.sleep(0.4)
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)
+            await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+        except Exception as e:
+            logger.error(f"Group send error {src}: {e}")
+
+
 def _filter_by_period(jobs: list, period: str) -> list:
     days = PERIOD_DAYS.get(period)
     if days is None:
@@ -1779,10 +1842,12 @@ async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword
             logger.info(f"AI normalized '{keyword}' → '{ai_kw}'")
             unique = _filter_by_period(await _search_all_sources(ai_kw), period)
             if unique:
+                total = len(unique)
                 await update.message.reply_text(
-                    f"🤖 Знайшов за запитом «{ai_kw}» — {len(unique[:10])} вакансій:"
+                    f"🤖 Знайшов за запитом «{ai_kw}» — <b>{total}</b> вакансій{period_label}:",
+                    parse_mode="HTML"
                 )
-                await _send_job_cards(update, unique)
+                await _send_grouped(update, unique)
                 return
         await update.message.reply_text(
             f"😔 Нічого не знайдено по запиту «{keyword}»{period_label}.\nСпробуйте інше ключове слово або розширте період.",
@@ -1790,8 +1855,12 @@ async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword
         )
         return
 
-    await update.message.reply_text(f"✅ Знайдено {len(unique[:10])} вакансій по запиту «{keyword}»{period_label}:")
-    await _send_job_cards(update, unique)
+    total = len(unique)
+    await update.message.reply_text(
+        f"✅ Знайдено <b>{total}</b> вакансій по запиту «{keyword}»{period_label}:",
+        parse_mode="HTML"
+    )
+    await _send_grouped(update, unique)
 
 
 async def send_jobs_now(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
