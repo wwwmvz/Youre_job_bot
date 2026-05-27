@@ -1187,43 +1187,68 @@ def _parse_tg_message(text: str, channel: str, msg_url: str):
         "source":  f"TG @{channel}",
     }
 
-async def fetch_tg_channels(keyword: str) -> list:
+async def _fetch_one_tg_channel(client: httpx.AsyncClient, channel: str, keyword: str, pages: int = 4) -> list:
+    """Fetch one TG channel with pagination via ?before=MSG_ID."""
     jobs = []
+    before_id = None
+    for _ in range(pages):
+        url = f"https://t.me/s/{channel}" + (f"?before={before_id}" if before_id else "")
+        try:
+            r = await client.get(url)
+            if r.status_code != 200:
+                break
+            soup = BeautifulSoup(r.text, "html.parser")
+            widgets = soup.select("div.tgme_widget_message_wrap")
+            if not widgets:
+                break
+            min_id = None
+            for widget in widgets:
+                msg_el = widget.select_one("div.tgme_widget_message_text")
+                if not msg_el:
+                    continue
+                text = msg_el.get_text(separator="\n", strip=True)
+                link_el = widget.select_one("a.tgme_widget_message_date")
+                msg_url = link_el["href"] if link_el else f"https://t.me/{channel}"
+                try:
+                    mid = int(msg_url.rstrip("/").split("/")[-1])
+                    if min_id is None or mid < min_id:
+                        min_id = mid
+                except Exception:
+                    pass
+                tg_dt_str = link_el.get("datetime", "") if link_el else ""
+                tg_posted_at = None
+                if tg_dt_str:
+                    try:
+                        tg_posted_at = datetime.fromisoformat(tg_dt_str).replace(tzinfo=None)
+                    except Exception:
+                        pass
+                job = _parse_tg_message(text, channel, msg_url)
+                if not job:
+                    continue
+                job["posted_at"] = tg_posted_at
+                if keyword and not _matches_keyword(job["title"] + " " + job["desc"], keyword):
+                    continue
+                jobs.append(job)
+            if min_id is None:
+                break
+            before_id = min_id
+        except Exception as e:
+            logger.warning(f"TG page error @{channel}: {e}")
+            break
+    return jobs
+
+
+async def fetch_tg_channels(keyword: str) -> list:
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36",
         "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.7",
     }
-    async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
-        for channel in TG_JOB_CHANNELS:
-            try:
-                r = await client.get(f"https://t.me/s/{channel}")
-                if r.status_code != 200:
-                    logger.warning(f"TG @{channel}: HTTP {r.status_code}")
-                    continue
-                soup = BeautifulSoup(r.text, "html.parser")
-                for widget in soup.select("div.tgme_widget_message_wrap"):
-                    msg_el = widget.select_one("div.tgme_widget_message_text")
-                    if not msg_el:
-                        continue
-                    text = msg_el.get_text(separator="\n", strip=True)
-                    link_el = widget.select_one("a.tgme_widget_message_date")
-                    msg_url = link_el["href"] if link_el else f"https://t.me/{channel}"
-                    tg_dt_str = link_el.get("datetime", "") if link_el else ""
-                    tg_posted_at = None
-                    if tg_dt_str:
-                        try:
-                            tg_posted_at = datetime.fromisoformat(tg_dt_str).replace(tzinfo=None)
-                        except Exception:
-                            pass
-                    job = _parse_tg_message(text, channel, msg_url)
-                    if not job:
-                        continue
-                    job["posted_at"] = tg_posted_at
-                    if keyword and not _matches_keyword(job["title"] + " " + job["desc"], keyword):
-                        continue
-                    jobs.append(job)
-            except Exception as e:
-                logger.warning(f"TG scrape error @{channel}: {e}")
+    async with httpx.AsyncClient(headers=headers, timeout=20, follow_redirects=True) as client:
+        results = await asyncio.gather(
+            *[_fetch_one_tg_channel(client, ch, keyword) for ch in TG_JOB_CHANNELS],
+            return_exceptions=True,
+        )
+    jobs = [j for r in results if isinstance(r, list) for j in r]
     logger.info(f"TG channels: знайдено {len(jobs)} по '{keyword}'")
     return jobs
 
