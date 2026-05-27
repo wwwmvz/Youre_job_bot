@@ -47,9 +47,11 @@ TG_JOB_CHANNELS = [
     "marketing_ukraine", # Marketing Kiev
 ]
 
-# Private channels — read via Telethon (add usernames or numeric IDs here)
+# Private channels — read via Telethon.
+# Each entry: channel_id  OR  (channel_id, invite_link)
+# Generate invite link in Telegram: channel → Manage → Invite Links → Create Link
 TG_PRIVATE_CHANNELS: list = [
-    -1001644192069,
+    (-1001644192069, ""),  # replace "" with t.me/+HASH invite link
 ]
 
 _tg_client = None
@@ -79,7 +81,7 @@ async def _get_tg_client():
         logger.error(f"Telethon connect error: {e}")
         return None
 
-def _parse_private_msg(text: str, channel, msg_id: int):
+def _parse_private_msg(text: str, channel, msg_id: int, invite_link: str = ""):
     if not text or len(text) < 30:
         return None
     lines = [l.strip() for l in text.splitlines() if l.strip()]
@@ -93,7 +95,12 @@ def _parse_private_msg(text: str, channel, msg_id: int):
         if re.search(r"\d[\d\s]*(?:грн|usd|\$|€|тис\.?|k\b)", line, re.I):
             salary = line[:80]; break
     url_m = re.search(r"https?://\S+", text)
-    ch_name = channel if isinstance(channel, str) else str(abs(int(str(channel))))
+    if isinstance(channel, str):
+        ch_name = channel
+    else:
+        ch_id_str = str(abs(int(str(channel))))
+        # t.me/c/ links use the ID without the "100" supergroup prefix
+        ch_name = ch_id_str[3:] if ch_id_str.startswith("100") else ch_id_str
     url = url_m.group(0).rstrip(".,)>") if url_m else f"https://t.me/c/{ch_name}/{msg_id}"
     return {
         "id": f"tgp_{ch_name}_{msg_id}",
@@ -101,6 +108,7 @@ def _parse_private_msg(text: str, channel, msg_id: int):
         "salary": salary, "city": "Україна",
         "desc": " ".join(lines[1:4])[:200],
         "url": url, "source": "TG (приватний)",
+        "invite_link": invite_link,
     }
 
 async def fetch_tg_private(keyword: str) -> list:
@@ -110,13 +118,18 @@ async def fetch_tg_private(keyword: str) -> list:
     if not client:
         return []
     jobs = []
-    for channel in TG_PRIVATE_CHANNELS:
+    for entry in TG_PRIVATE_CHANNELS:
+        if isinstance(entry, tuple):
+            channel = entry[0]
+            invite_link = entry[1] if len(entry) > 1 else ""
+        else:
+            channel, invite_link = entry, ""
         try:
             entity = await client.get_entity(channel)
             messages = await client.get_messages(entity, limit=100)
             for msg in messages:
                 text = msg.text or msg.message or ""
-                job = _parse_private_msg(text, channel, msg.id)
+                job = _parse_private_msg(text, channel, msg.id, invite_link)
                 if not job:
                     continue
                 search_text = job["title"] + " " + job["desc"]
@@ -1568,6 +1581,8 @@ async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword
             if desc:
                 lines.append(f"\n📝 {desc}")
         lines.append(f"\n🔗 <a href='{job['url']}'>Переглянути ({job['source']})</a>")
+        if job.get("invite_link"):
+            lines.append(f"🔓 <a href='{job['invite_link']}'>Приєднатись до каналу</a>")
         text = "\n".join(lines)
         try:
             await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
