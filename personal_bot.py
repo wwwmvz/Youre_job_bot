@@ -8,6 +8,12 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.error import RetryAfter
 import nest_asyncio
+try:
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+    TELETHON_OK = True
+except ImportError:
+    TELETHON_OK = False
 
 nest_asyncio.apply()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -16,7 +22,11 @@ logger = logging.getLogger(__name__)
 PERSONAL_BOT_TOKEN = os.environ.get("PERSONAL_BOT_TOKEN")
 MAIN_CHANNEL       = os.environ.get("MAIN_CHANNEL", "https://t.me/+YNCaw9gBllI5NzU0")
 DATABASE_URL       = os.environ.get("DATABASE_URL",        "")
-# Public Telegram job channels (username without @) — verified working
+TG_API_ID   = os.environ.get("TG_API_ID",  "")
+TG_API_HASH = os.environ.get("TG_API_HASH", "")
+TG_SESSION  = os.environ.get("TG_SESSION",  "")
+
+# Public channels — scraped via t.me/s/ (no auth)
 TG_JOB_CHANNELS = [
     # IT
     "djinni_jobs",       # Djinni — IT вакансії
@@ -36,6 +46,74 @@ TG_JOB_CHANNELS = [
     "non_it_jobs",       # Non IT Jobs
     "marketing_ukraine", # Marketing Kiev
 ]
+
+# Private channels — read via Telethon (add usernames or numeric IDs here)
+TG_PRIVATE_CHANNELS: list = [
+    # Приклад: "my_private_job_channel" або -1001234567890
+    # Додайте сюди username або ID приватного каналу
+]
+
+_tg_client = None
+
+async def _get_tg_client():
+    global _tg_client
+    if not TELETHON_OK or not TG_API_ID or not TG_API_HASH or not TG_SESSION:
+        return None
+    if _tg_client and _tg_client.is_connected():
+        return _tg_client
+    try:
+        client = TelegramClient(StringSession(TG_SESSION), int(TG_API_ID), TG_API_HASH)
+        await client.connect()
+        if not await client.is_user_authorized():
+            logger.warning("Telethon: сесія не авторизована")
+            return None
+        _tg_client = client
+        logger.info("Telethon підключено")
+        return client
+    except Exception as e:
+        logger.error(f"Telethon connect error: {e}")
+        return None
+
+async def fetch_tg_private(keyword: str) -> list:
+    if not TG_PRIVATE_CHANNELS:
+        return []
+    client = await _get_tg_client()
+    if not client:
+        return []
+    jobs = []
+    for channel in TG_PRIVATE_CHANNELS:
+        try:
+            messages = await client.get_messages(channel, limit=50)
+            for msg in messages:
+                text = msg.text or msg.message or ""
+                if not text or len(text) < 30:
+                    continue
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                if not lines:
+                    continue
+                title = lines[0].lstrip("#*•➡️🔹🔸▪️◾️✅🚀💼📌🔔⚡").strip()
+                if len(title) < 5 or len(title) > 150:
+                    continue
+                if keyword and not _matches_keyword(title + " " + " ".join(lines[1:5]), keyword):
+                    continue
+                salary = ""
+                for line in lines[1:]:
+                    if re.search(r"\d[\d\s]*(?:грн|usd|\$|€|тис\.?|k\b)", line, re.I):
+                        salary = line[:80]; break
+                url_m = re.search(r"https?://\S+", text)
+                url = url_m.group(0).rstrip(".,)>") if url_m else f"https://t.me/{channel}/{msg.id}"
+                ch_name = channel if isinstance(channel, str) else str(channel)
+                jobs.append({
+                    "id": f"tgp_{ch_name}_{msg.id}",
+                    "title": title, "company": "Компанія",
+                    "salary": salary, "city": "Україна",
+                    "desc": " ".join(lines[1:4])[:200],
+                    "url": url, "source": f"TG (приватний)",
+                })
+        except Exception as e:
+            logger.warning(f"Telethon private @{channel}: {e}")
+    logger.info(f"Telethon private: знайдено {len(jobs)} по '{keyword}'")
+    return jobs
 
 logger.info(f"DATABASE_URL present: {bool(DATABASE_URL)}")
 logger.info(f"TOKEN present: {bool(PERSONAL_BOT_TOKEN)}")
@@ -1437,17 +1515,18 @@ async def fetch_jobs_ua_search(keyword: str) -> list:
 async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str):
     await update.message.reply_text(f"🔍 Шукаю «{keyword}»...", reply_markup=MAIN_KB)
 
-    dou_r, djinni_r, jobsua_r, workua_r, tg_r = await asyncio.gather(
+    dou_r, djinni_r, jobsua_r, workua_r, tg_r, tgp_r = await asyncio.gather(
         fetch_dou(keyword),
         fetch_djinni_search(keyword),
         fetch_jobs_ua_search(keyword),
         fetch_workua_search(keyword),
         fetch_tg_channels(keyword),
+        fetch_tg_private(keyword),
         return_exceptions=True,
     )
     def _safe(r): return r if isinstance(r, list) else []
     dou_filtered = [j for j in _safe(dou_r) if _matches_keyword(j["title"], keyword)]
-    all_jobs = dou_filtered + _safe(djinni_r) + _safe(jobsua_r) + _safe(workua_r) + _safe(tg_r)
+    all_jobs = dou_filtered + _safe(djinni_r) + _safe(jobsua_r) + _safe(workua_r) + _safe(tg_r) + _safe(tgp_r)
 
     seen = set()
     unique = []
