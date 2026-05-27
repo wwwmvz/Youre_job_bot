@@ -1794,9 +1794,9 @@ async def fetch_robotaua(keyword: str) -> list:
                 vacancy_id = item.get("vacancyId") or item.get("id") or ""
                 notebook_id = item.get("notebookId") or ""
                 if vacancy_id and notebook_id:
-                    url = f"https://robota.ua/ua/company/{notebook_id}/vacancies/{vacancy_id}"
+                    url = f"https://robota.ua/company{notebook_id}/vacancy{vacancy_id}"
                 elif vacancy_id:
-                    url = f"https://robota.ua/ua/vacancy/{vacancy_id}"
+                    url = f"https://robota.ua/company0/vacancy{vacancy_id}"
                 else:
                     url = "https://robota.ua"
                 company = (
