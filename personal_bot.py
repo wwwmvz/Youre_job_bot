@@ -45,6 +45,7 @@ TG_JOB_CHANNELS = [
     # Не-IT
     "non_it_jobs",       # Non IT Jobs
     "marketing_ukraine", # Marketing Kiev
+    "hr_affiliate",      # HR & affiliate вакансії
 ]
 
 # Private channels — read via Telethon.
