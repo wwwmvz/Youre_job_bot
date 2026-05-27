@@ -565,8 +565,9 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         state = user_state.get(uid, {})
         if state.get("step") == "search_period":
             keyword = state.get("keyword", "")
+            city    = state.get("city")
             user_state.pop(uid, None)
-            await keyword_search(update, ctx, keyword, period=text)
+            await keyword_search(update, ctx, keyword, period=text, city=city)
         else:
             await update.message.reply_text("Введіть ключове слово для пошуку:", reply_markup=MAIN_KB)
         return
@@ -575,11 +576,51 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     step  = state.get("step")
 
     if not step:
-        user_state[uid] = {"step": "search_period", "keyword": text}
-        await update.message.reply_text(
-            f"🔍 Шукати «{text}»\n\nЗа який період показати вакансії?",
-            reply_markup=period_kb()
-        )
+        user_profile = get_user(uid)
+        profile_city = user_profile.get("city", "") if user_profile else ""
+        if profile_city:
+            user_state[uid] = {"step": "search_city", "keyword": text}
+            await update.message.reply_text(
+                f"🔍 Шукати «{text}»\n\nВ якому місті шукати?",
+                reply_markup=city_search_kb(profile_city)
+            )
+        else:
+            user_state[uid] = {"step": "search_period", "keyword": text}
+            await update.message.reply_text(
+                f"🔍 Шукати «{text}»\n\nЗа який період показати вакансії?",
+                reply_markup=period_kb()
+            )
+        return
+
+    if step == "search_city":
+        user_profile = get_user(uid)
+        profile_city = user_profile.get("city", "") if user_profile else ""
+        if text == "🌍 Інше місто":
+            state["step"] = "search_city_other"
+            user_state[uid] = state
+            await update.message.reply_text("Оберіть місто:", reply_markup=city_kb())
+            return
+        if text == "🌐 По всій Україні":
+            city = None
+        elif text.startswith("🏙️ "):
+            city = text[len("🏙️ "):]
+        else:
+            await update.message.reply_text("Оберіть варіант 👇", reply_markup=city_search_kb(profile_city))
+            return
+        state["city"] = city
+        state["step"] = "search_period"
+        user_state[uid] = state
+        await update.message.reply_text("За який період показати вакансії?", reply_markup=period_kb())
+        return
+
+    if step == "search_city_other":
+        if text not in CITIES:
+            await update.message.reply_text("Оберіть місто з кнопок 👇", reply_markup=city_kb())
+            return
+        state["city"] = text
+        state["step"] = "search_period"
+        user_state[uid] = state
+        await update.message.reply_text("За який період показати вакансії?", reply_markup=period_kb())
         return
 
     if step == "search_period":
@@ -587,8 +628,9 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Оберіть період 👇", reply_markup=period_kb())
             return
         keyword = state.get("keyword", "")
+        city    = state.get("city")
         user_state.pop(uid, None)
-        await keyword_search(update, ctx, keyword, period=text)
+        await keyword_search(update, ctx, keyword, period=text, city=city)
         return
 
     if step == "repeat_search_choice":
@@ -2039,10 +2081,35 @@ def _filter_by_period(jobs: list, period: str) -> list:
     return [j for j in jobs if j.get("posted_at") is None or j["posted_at"] >= cutoff]
 
 
-async def _offer_repeat_search(update: Update, uid: int, keyword: str, period: str, cached: list, period_label: str):
-    user_state[uid] = {"step": "repeat_search_choice", "keyword": keyword, "period": period, "cached_jobs": cached}
+def _filter_by_city(jobs: list, city: str) -> list:
+    if not city:
+        return jobs
+    city_lower = city.lower()
+    result = []
+    for job in jobs:
+        job_city = (job.get("city") or "").lower()
+        # Keep if city matches, or if city is unknown/nationwide, or remote
+        if (city_lower in job_city
+                or job_city in ("україна", "украина", "")
+                or any(w in job_city for w in ["дистанц", "remote", "віддал"])):
+            result.append(job)
+    return result
+
+
+def city_search_kb(profile_city: str) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(f"🏙️ {profile_city}"), KeyboardButton("🌍 Інше місто")],
+         [KeyboardButton("🌐 По всій Україні")]],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+
+
+async def _offer_repeat_search(update: Update, uid: int, keyword: str, period: str,
+                               city, cached: list, period_label: str, city_label: str = ""):
+    user_state[uid] = {"step": "repeat_search_choice", "keyword": keyword, "period": period,
+                       "city": city, "cached_jobs": cached}
     await update.message.reply_text(
-        f"😔 Нових вакансій по запиту «{keyword}»{period_label} немає.\n\n"
+        f"😔 Нових вакансій по запиту «{keyword}»{city_label}{period_label} немає.\n\n"
         f"Знайдено <b>{len(cached)}</b> раніше показаних вакансій. Що робимо?",
         parse_mode="HTML",
         reply_markup=ReplyKeyboardMarkup(
@@ -2067,50 +2134,58 @@ def _set_shown(uid: int, kw_key: str, ids: set):
     save_keyword_shown(uid, kw_key, ids)
 
 
-async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE, keyword: str, period: str = "📅 Всі вакансії"):
+async def keyword_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                         keyword: str, period: str = "📅 Всі вакансії", city: str = None):
     uid = update.effective_user.id
     period_label = "" if period == "📅 Всі вакансії" else f" ({period.replace('📅 ', '')})"
-    await update.message.reply_text(f"🔍 Шукаю «{keyword}»{period_label}...", reply_markup=MAIN_KB)
+    city_label   = f" в {city}" if city else ""
+    await update.message.reply_text(
+        f"🔍 Шукаю «{keyword}»{city_label}{period_label}...", reply_markup=MAIN_KB
+    )
 
-    all_jobs = _filter_by_period(await _search_all_sources(keyword), period)
+    def _apply_filters(jobs):
+        return _filter_by_city(_filter_by_period(jobs, period), city)
+
+    all_jobs = _apply_filters(await _search_all_sources(keyword))
 
     if not all_jobs:
         # AI fallback: normalize/translate the query and retry
         ai_kw = await _ai_normalize_query(keyword)
         if ai_kw and ai_kw.strip().lower() != keyword.strip().lower():
             logger.info(f"AI normalized '{keyword}' → '{ai_kw}'")
-            ai_jobs = _filter_by_period(await _search_all_sources(ai_kw), period)
+            ai_jobs = _apply_filters(await _search_all_sources(ai_kw))
             if ai_jobs:
-                kw_key = ai_kw.strip().lower()
+                kw_key = f"{ai_kw.strip().lower()}|{city or ''}"
                 shown = _get_shown(uid, kw_key)
                 new_jobs = [j for j in ai_jobs if j["id"] not in shown]
                 if new_jobs:
                     _set_shown(uid, kw_key, shown | {j["id"] for j in new_jobs})
                     await update.message.reply_text(
-                        f"🤖 Знайшов за запитом «{ai_kw}» — <b>{len(new_jobs)}</b> вакансій{period_label}:",
+                        f"🤖 Знайшов за запитом «{ai_kw}»{city_label} — <b>{len(new_jobs)}</b> вакансій{period_label}:",
                         parse_mode="HTML"
                     )
                     await _send_grouped(update, new_jobs)
                 else:
-                    await _offer_repeat_search(update, uid, ai_kw, period, ai_jobs, period_label)
+                    await _offer_repeat_search(update, uid, ai_kw, period, city, ai_jobs, period_label, city_label)
                 return
         await update.message.reply_text(
-            f"😔 Нічого не знайдено по запиту «{keyword}»{period_label}.\nСпробуйте інше ключове слово або розширте період.",
+            f"😔 Нічого не знайдено по запиту «{keyword}»{city_label}{period_label}.\n"
+            f"Спробуйте інше ключове слово, місто або розширте період.",
             reply_markup=MAIN_KB
         )
         return
 
-    kw_key = keyword.strip().lower()
+    kw_key = f"{keyword.strip().lower()}|{city or ''}"
     shown = _get_shown(uid, kw_key)
     new_jobs = [j for j in all_jobs if j["id"] not in shown]
 
     if not new_jobs:
-        await _offer_repeat_search(update, uid, keyword, period, all_jobs, period_label)
+        await _offer_repeat_search(update, uid, keyword, period, city, all_jobs, period_label, city_label)
         return
 
     _set_shown(uid, kw_key, shown | {j["id"] for j in new_jobs})
     await update.message.reply_text(
-        f"✅ Знайдено <b>{len(new_jobs)}</b> нових вакансій по запиту «{keyword}»{period_label}:",
+        f"✅ Знайдено <b>{len(new_jobs)}</b> нових вакансій по запиту «{keyword}»{city_label}{period_label}:",
         parse_mode="HTML"
     )
     await _send_grouped(update, new_jobs)
