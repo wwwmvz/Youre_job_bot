@@ -53,9 +53,10 @@ TG_PRIVATE_CHANNELS: list = [
 ]
 
 _tg_client = None
+_tg_dialogs_loaded = False
 
 async def _get_tg_client():
-    global _tg_client
+    global _tg_client, _tg_dialogs_loaded
     if not TELETHON_OK or not TG_API_ID or not TG_API_HASH or not TG_SESSION:
         return None
     if _tg_client and _tg_client.is_connected():
@@ -67,11 +68,40 @@ async def _get_tg_client():
             logger.warning("Telethon: сесія не авторизована")
             return None
         _tg_client = client
+        # Load dialogs once to cache access hashes for all channels/groups
+        if not _tg_dialogs_loaded:
+            await client.get_dialogs()
+            _tg_dialogs_loaded = True
+            logger.info("Telethon: діалоги завантажено")
         logger.info("Telethon підключено")
         return client
     except Exception as e:
         logger.error(f"Telethon connect error: {e}")
         return None
+
+def _parse_private_msg(text: str, channel, msg_id: int):
+    if not text or len(text) < 30:
+        return None
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines:
+        return None
+    title = lines[0].lstrip("#*•➡️🔹🔸▪️◾️✅🚀💼📌🔔⚡🔴🟢🟡").strip()
+    if len(title) < 5 or len(title) > 150:
+        return None
+    salary = ""
+    for line in lines[1:]:
+        if re.search(r"\d[\d\s]*(?:грн|usd|\$|€|тис\.?|k\b)", line, re.I):
+            salary = line[:80]; break
+    url_m = re.search(r"https?://\S+", text)
+    ch_name = channel if isinstance(channel, str) else str(abs(int(str(channel))))
+    url = url_m.group(0).rstrip(".,)>") if url_m else f"https://t.me/c/{ch_name}/{msg_id}"
+    return {
+        "id": f"tgp_{ch_name}_{msg_id}",
+        "title": title, "company": "Компанія",
+        "salary": salary, "city": "Україна",
+        "desc": " ".join(lines[1:4])[:200],
+        "url": url, "source": "TG (приватний)",
+    }
 
 async def fetch_tg_private(keyword: str) -> list:
     if not TG_PRIVATE_CHANNELS:
@@ -82,35 +112,19 @@ async def fetch_tg_private(keyword: str) -> list:
     jobs = []
     for channel in TG_PRIVATE_CHANNELS:
         try:
-            messages = await client.get_messages(channel, limit=50)
+            entity = await client.get_entity(channel)
+            messages = await client.get_messages(entity, limit=100)
             for msg in messages:
                 text = msg.text or msg.message or ""
-                if not text or len(text) < 30:
+                job = _parse_private_msg(text, channel, msg.id)
+                if not job:
                     continue
-                lines = [l.strip() for l in text.splitlines() if l.strip()]
-                if not lines:
+                search_text = job["title"] + " " + job["desc"]
+                if keyword and not _matches_keyword(search_text, keyword):
                     continue
-                title = lines[0].lstrip("#*•➡️🔹🔸▪️◾️✅🚀💼📌🔔⚡").strip()
-                if len(title) < 5 or len(title) > 150:
-                    continue
-                if keyword and not _matches_keyword(title + " " + " ".join(lines[1:5]), keyword):
-                    continue
-                salary = ""
-                for line in lines[1:]:
-                    if re.search(r"\d[\d\s]*(?:грн|usd|\$|€|тис\.?|k\b)", line, re.I):
-                        salary = line[:80]; break
-                url_m = re.search(r"https?://\S+", text)
-                url = url_m.group(0).rstrip(".,)>") if url_m else f"https://t.me/{channel}/{msg.id}"
-                ch_name = channel if isinstance(channel, str) else str(channel)
-                jobs.append({
-                    "id": f"tgp_{ch_name}_{msg.id}",
-                    "title": title, "company": "Компанія",
-                    "salary": salary, "city": "Україна",
-                    "desc": " ".join(lines[1:4])[:200],
-                    "url": url, "source": f"TG (приватний)",
-                })
+                jobs.append(job)
         except Exception as e:
-            logger.warning(f"Telethon private @{channel}: {e}")
+            logger.warning(f"Telethon private {channel}: {e}")
     logger.info(f"Telethon private: знайдено {len(jobs)} по '{keyword}'")
     return jobs
 
@@ -1389,7 +1403,7 @@ async def fetch_djinni_search(keyword: str) -> list:
                "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.7"}
     try:
         async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
-            for page in range(1, 3):
+            for page in range(1, 9):
                 url = f"https://djinni.co/jobs/?q={quote_plus(keyword)}" if page == 1 else f"https://djinni.co/jobs/?q={quote_plus(keyword)}&page={page}"
                 r = await client.get(url)
                 if r.status_code != 200:
