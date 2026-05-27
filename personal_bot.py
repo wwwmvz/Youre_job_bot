@@ -49,8 +49,7 @@ TG_JOB_CHANNELS = [
 
 # Private channels — read via Telethon (add usernames or numeric IDs here)
 TG_PRIVATE_CHANNELS: list = [
-    # Приклад: "my_private_job_channel" або -1001234567890
-    # Додайте сюди username або ID приватного каналу
+    -1001644192069,
 ]
 
 _tg_client = None
