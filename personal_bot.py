@@ -1778,9 +1778,9 @@ async def fetch_robotaua(keyword: str) -> list:
     }
     try:
         async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
-            r = await client.get(
+            r = await client.post(
                 "https://api.robota.ua/vacancy/search",
-                params={"keyWords": keyword, "page": 0, "count": 20},
+                json={"keyWords": keyword, "ukrainian": True, "page": 0, "count": 20},
             )
             if r.status_code != 200:
                 logger.warning(f"Robota.ua API status {r.status_code}")
@@ -1792,7 +1792,13 @@ async def fetch_robotaua(keyword: str) -> list:
                 if not title or not _matches_keyword(title, keyword):
                     continue
                 vacancy_id = item.get("vacancyId") or item.get("id") or ""
-                url = f"https://robota.ua/ua/vacancy/{vacancy_id}" if vacancy_id else "https://robota.ua"
+                notebook_id = item.get("notebookId") or ""
+                if vacancy_id and notebook_id:
+                    url = f"https://robota.ua/ua/company/{notebook_id}/vacancies/{vacancy_id}"
+                elif vacancy_id:
+                    url = f"https://robota.ua/ua/vacancy/{vacancy_id}"
+                else:
+                    url = "https://robota.ua"
                 company = (
                     item.get("companyName") or
                     (item.get("company") or {}).get("name") or "Компанія"
@@ -1803,12 +1809,17 @@ async def fetch_robotaua(keyword: str) -> list:
                 )
                 city = city_val.strip() if isinstance(city_val, str) else "Україна"
                 salary = ""
-                sal_from = item.get("salaryFrom")
-                sal_to = item.get("salaryTo")
-                if sal_from or sal_to:
-                    salary = f"{sal_from or ''}–{sal_to or ''}".strip("–") + " UAH"
+                sal_from = item.get("salaryFrom") or 0
+                sal_to = item.get("salaryTo") or 0
+                sal_single = item.get("salary") or 0
+                if sal_from and sal_to:
+                    salary = f"{sal_from}–{sal_to} UAH"
+                elif sal_from or sal_to:
+                    salary = f"{sal_from or sal_to} UAH"
+                elif sal_single:
+                    salary = f"{sal_single} UAH"
                 posted_at = None
-                date_str = item.get("publishedAt") or item.get("modifiedDate") or ""
+                date_str = item.get("date") or item.get("publishedAt") or ""
                 if date_str:
                     try:
                         posted_at = datetime.fromisoformat(date_str[:19])
