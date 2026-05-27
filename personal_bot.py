@@ -1091,6 +1091,7 @@ SYNONYMS: dict[str, list[str]] = {
     "blogger":       ["блогер", "блоггер"],
     "инфлюенсер":    ["influencer", "блогер"],
     "influencer":    ["блогер", "інфлюенсер"],
+    "influence":     ["influencer", "блогер", "інфлюенсер"],
     "інфлюенсер":    ["influencer", "блогер"],
 }
 
@@ -1247,8 +1248,13 @@ async def fetch_dou(keywords):
     jobs = []
     headers = {"User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
     try:
+        keyword_str = keywords.strip() if isinstance(keywords, str) else ""
+        if keyword_str:
+            url = f"https://jobs.dou.ua/vacancies/?search={quote_plus(keyword_str)}"
+        else:
+            url = "https://jobs.dou.ua/vacancies/"
         async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
-            r = await client.get("https://jobs.dou.ua/vacancies/")
+            r = await client.get(url)
             if r.status_code != 200: return jobs
             soup = BeautifulSoup(r.text, "lxml")
             for li in soup.select("li.l-vacancy")[:20]:
