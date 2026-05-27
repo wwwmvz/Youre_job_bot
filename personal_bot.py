@@ -1725,6 +1725,107 @@ async def fetch_jobs_ua_search(keyword: str) -> list:
     return jobs
 
 
+async def fetch_workua_rss(keyword: str) -> list:
+    """Fetch Work.ua via RSS feed (bypasses 403 datacenter block)."""
+    import xml.etree.ElementTree as ET
+    jobs = []
+    url = f"https://www.work.ua/jobs/rss/?search={quote_plus(keyword)}"
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"}
+    try:
+        async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
+            r = await client.get(url)
+            if r.status_code != 200:
+                logger.warning(f"Work.ua RSS status {r.status_code}")
+                return jobs
+            root = ET.fromstring(r.text)
+            channel_el = root.find("channel")
+            if channel_el is None:
+                return jobs
+            for item in channel_el.findall("item")[:30]:
+                title = (item.findtext("title") or "").strip()
+                if not title or not _matches_keyword(title, keyword):
+                    continue
+                link = (item.findtext("link") or "").strip()
+                desc_raw = (item.findtext("description") or "").strip()
+                desc = BeautifulSoup(desc_raw, "html.parser").get_text(separator=" ", strip=True)[:200]
+                pub_date = item.findtext("pubDate") or ""
+                posted_at = None
+                if pub_date:
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        posted_at = parsedate_to_datetime(pub_date).replace(tzinfo=None)
+                    except Exception:
+                        pass
+                parts = link.rstrip("/").split("/")
+                job_id = f"workua_rss_{parts[-2]}" if len(parts) >= 2 else f"workua_rss_{abs(hash(title))}"
+                jobs.append({
+                    "id": job_id, "title": title, "company": "Компанія",
+                    "salary": "", "city": "Україна", "desc": desc,
+                    "url": link, "source": "Work.ua", "posted_at": posted_at,
+                })
+    except Exception as e:
+        logger.error(f"Work.ua RSS error: {e}")
+    logger.info(f"Work.ua RSS: знайдено {len(jobs)} по '{keyword}'")
+    return jobs
+
+
+async def fetch_robotaua(keyword: str) -> list:
+    """Fetch Robota.ua via public API (bypasses Cloudflare)."""
+    jobs = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(headers=headers, timeout=15, follow_redirects=True) as client:
+            r = await client.get(
+                "https://api.robota.ua/vacancy/search",
+                params={"keyWords": keyword, "page": 0, "count": 20},
+            )
+            if r.status_code != 200:
+                logger.warning(f"Robota.ua API status {r.status_code}")
+                return jobs
+            data = r.json()
+            items = data.get("documents", data if isinstance(data, list) else [])
+            for item in items[:20]:
+                title = (item.get("name") or item.get("title") or "").strip()
+                if not title or not _matches_keyword(title, keyword):
+                    continue
+                vacancy_id = item.get("vacancyId") or item.get("id") or ""
+                url = f"https://robota.ua/ua/vacancy/{vacancy_id}" if vacancy_id else "https://robota.ua"
+                company = (
+                    item.get("companyName") or
+                    (item.get("company") or {}).get("name") or "Компанія"
+                ).strip()
+                city_val = (
+                    item.get("cityName") or
+                    (item.get("city") or {}).get("name") or "Україна"
+                )
+                city = city_val.strip() if isinstance(city_val, str) else "Україна"
+                salary = ""
+                sal_from = item.get("salaryFrom")
+                sal_to = item.get("salaryTo")
+                if sal_from or sal_to:
+                    salary = f"{sal_from or ''}–{sal_to or ''}".strip("–") + " UAH"
+                posted_at = None
+                date_str = item.get("publishedAt") or item.get("modifiedDate") or ""
+                if date_str:
+                    try:
+                        posted_at = datetime.fromisoformat(date_str[:19])
+                    except Exception:
+                        pass
+                job_id = f"robota_{vacancy_id}" if vacancy_id else f"robota_{abs(hash(title))}"
+                jobs.append({
+                    "id": job_id, "title": title, "company": company,
+                    "salary": salary, "city": city, "desc": "",
+                    "url": url, "source": "Robota.ua", "posted_at": posted_at,
+                })
+    except Exception as e:
+        logger.error(f"Robota.ua API error: {e}")
+    logger.info(f"Robota.ua: знайдено {len(jobs)} по '{keyword}'")
+    return jobs
+
+
 async def _ai_normalize_query(query: str):
     """Use Claude Haiku to extract job title keywords from any language/natural language query."""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -1755,15 +1856,16 @@ async def _ai_normalize_query(query: str):
 
 async def _search_all_sources(keyword: str) -> list:
     """Search all sources and return deduplicated list."""
-    dou_r, djinni_r, jobsua_r, workua_r, tg_r, tgp_r = await asyncio.gather(
+    dou_r, djinni_r, jobsua_r, workua_r, robota_r, tg_r, tgp_r = await asyncio.gather(
         fetch_dou(keyword), fetch_djinni_search(keyword),
-        fetch_jobs_ua_search(keyword), fetch_workua_search(keyword),
+        fetch_jobs_ua_search(keyword), fetch_workua_rss(keyword),
+        fetch_robotaua(keyword),
         fetch_tg_channels(keyword), fetch_tg_private(keyword),
         return_exceptions=True,
     )
     def _safe(r): return r if isinstance(r, list) else []
     dou_filtered = [j for j in _safe(dou_r) if _matches_keyword(j["title"], keyword)]
-    all_jobs = dou_filtered + _safe(djinni_r) + _safe(jobsua_r) + _safe(workua_r) + _safe(tg_r) + _safe(tgp_r)
+    all_jobs = dou_filtered + _safe(djinni_r) + _safe(jobsua_r) + _safe(workua_r) + _safe(robota_r) + _safe(tg_r) + _safe(tgp_r)
     seen = set()
     unique = []
     for job in all_jobs:
@@ -1800,7 +1902,7 @@ async def _send_job_cards(update: Update, jobs: list):
             logger.error(f"Search send error: {e}")
 
 
-_SOURCE_ORDER = ["DOU.ua", "Djinni", "Work.ua", "Jobs.ua", "TG канали", "TG (приватний)"]
+_SOURCE_ORDER = ["DOU.ua", "Djinni", "Work.ua", "Robota.ua", "Jobs.ua", "TG канали", "TG (приватний)"]
 
 async def _send_grouped(update: Update, jobs: list):
     """Send results grouped by source, up to 10 per source, one message per group."""
